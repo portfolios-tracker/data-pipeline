@@ -7,10 +7,13 @@ apache-airflow-providers-common-sql
 psycopg2-binary
 clickhouse-connect
 asyncpg
+supabase
 
 # Financial & Data Tools
 yfinance
 vnstock
+pycoingecko
+lxml
 pandas
 numpy
 pandas_ta==0.4.71b0

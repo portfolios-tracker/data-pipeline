@@ -99,7 +99,19 @@ ingested_at DateTime DEFAULT now()
 ENGINE = ReplacingMergeTree()
 ORDER BY (ticker, year, quarter);
 
--- Table: Company Metadata
+-- ===================================================================
+-- Table: Company Metadata (VN Stocks Only)
+-- ===================================================================
+-- ⚠️ DEPRECATION NOTICE:
+-- This table is DEPRECATED and will be removed in Epic 4.
+-- Use market_dwh.dim_assets WHERE asset_class = 'STOCK' AND market = 'VN' instead.
+-- 
+-- Kept for backward compatibility with existing views:
+--   - view_market_daily_master
+--   - view_valuation_daily
+--
+-- Migration: See schema-migration-plan.md
+-- ===================================================================
 CREATE TABLE IF NOT EXISTS market_dwh.dim_stock_companies (
     symbol String,
     organ_name String,
@@ -284,3 +296,49 @@ FROM metrics_with_lag AS m
     LEFT JOIN market_dwh.fact_financial_ratios AS r ON m.ticker = r.ticker
     AND m.fiscal_date = r.fiscal_date
 ORDER BY m.ticker, m.year, m.quarter;
+
+-- ===================================================================
+-- ASSET DIMENSION TABLE (Single Table Inheritance - STI)
+-- ===================================================================
+-- Unified schema for all asset types using STI pattern
+-- Discriminator: asset_class (STOCK, CRYPTO, BOND, ETF, FOREX)
+-- Market: Country code for stocks (VN, US, UK, JP)
+
+CREATE TABLE IF NOT EXISTS market_dwh.dim_assets (
+    -- Core identifiers
+    symbol String,
+    name_en String,
+    name_local String DEFAULT '',
+    
+    -- Classification (STI discriminator + market)
+    asset_class LowCardinality(String),   -- STOCK, CRYPTO, BOND, ETF, FOREX
+    market LowCardinality(String) DEFAULT '',  -- VN, US, UK, JP (empty for CRYPTO/FOREX)
+    currency LowCardinality(String),      -- VND, USD, GBP, JPY
+    exchange LowCardinality(String) DEFAULT '',  -- HOSE, NASDAQ, NYSE
+    
+    -- Common metadata
+    sector LowCardinality(String) DEFAULT '',
+    industry String DEFAULT '',
+    logo_url String DEFAULT '',
+    description String DEFAULT '',
+    
+    -- Type-specific metadata (flexible Map)
+    -- STOCK: {isin, cik, sedol, cusip, figi}
+    -- CRYPTO: {coingecko_id, chain, contract_address, is_stablecoin}
+    external_api_metadata Map(String, String) DEFAULT map(),
+    
+    -- Data lineage
+    source LowCardinality(String) DEFAULT '',  -- vnstock, yfinance, coingecko
+    is_active UInt8 DEFAULT 1,
+    ingested_at DateTime DEFAULT now()
+
+) ENGINE = ReplacingMergeTree(ingested_at)
+ORDER BY (asset_class, market, symbol)
+PARTITION BY asset_class;
+
+-- Design Notes:
+-- 1. STI Pattern: asset_class is discriminator, all assets in one table
+-- 2. market column separates VN vs US stocks (not baked into asset_class)
+-- 3. Partitioned by asset_class for efficient analytics per type
+-- 4. LowCardinality for enum-like columns (better compression)
+-- 5. external_api_metadata Map for type-specific fields

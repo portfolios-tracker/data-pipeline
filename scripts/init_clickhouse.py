@@ -35,10 +35,30 @@ def init_db():
             sql_script = f.read()
 
         # Split by semicolon to get individual commands
-        # Filter out empty strings/whitespace
-        commands = [cmd.strip() for cmd in sql_script.split(";") if cmd.strip()]
+        raw_commands = sql_script.split(";")
+        commands = []
+        
+        for cmd in raw_commands:
+            # Remove comments and whitespace
+            lines = cmd.split('\n')
+            clean_lines = []
+            for line in lines:
+                # Strip comments (simple -- style)
+                line = line.split('--')[0].strip()
+                if line:
+                    clean_lines.append(line)
+            
+            clean_cmd = ' '.join(clean_lines)
+            
+            if clean_cmd:
+                commands.append(cmd)  # Keep original formatting for readability if needed, or use clean_cmd
 
+        
         for command in commands:
+            # simple check to avoid sending just comments if logic above missed something
+            if not command.strip() or command.strip().startswith('--'):
+                continue
+                
             print(f"Executing: {command[:50]}...")
             client.command(command)
 

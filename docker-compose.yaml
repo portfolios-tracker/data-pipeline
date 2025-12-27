@@ -74,6 +74,8 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
     TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
     GEMINI_API_KEY: "${GEMINI_API_KEY}"
+    SUPABASE_URL: "${SUPABASE_URL}"
+    SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
