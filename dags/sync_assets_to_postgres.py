@@ -148,11 +148,13 @@ def sync_assets(**context):
             logger.debug(
                 f"About to upsert batch {i // batch_size + 1}, size: {len(batch)}"
             )
-            # on_conflict specifies the constraint to use for upsert logic
-            # for public.assets, it's (symbol, market, asset_class)
+            # Upsert logic:
+            # - For assets with market: conflict on (symbol, market, asset_class) via idx_assets_unique_with_market
+            # - For assets without market (NULL): conflict on (symbol, asset_class) via idx_assets_unique_without_market
+            # We use ignoreDuplicates=False to update existing records
             response = (
                 supabase.table("assets")
-                .upsert(batch, on_conflict="symbol,market,asset_class")
+                .upsert(batch, ignore_duplicates=False)
                 .execute()
             )
 
