@@ -17,8 +17,8 @@ def clean_decimal_cols(df, cols):
             df[col] = pd.to_numeric(df[col], errors="coerce")
             # 2. Replace Infinity with NaN (so we can fillna them next)
             df[col] = df[col].replace([np.inf, -np.inf], np.nan)
-            # 3. Fill NaN with 0
-            df[col] = df[col].fillna(0)
+            # 3. Fill NaN with 0 and infer objects to avoid downcasting warning
+            df[col] = df[col].fillna(0).infer_objects(copy=False)
     return df
 
 
@@ -289,6 +289,15 @@ def fetch_dividends(symbol):
             df, ["cash_dividend_percentage", "stock_dividend_percentage"]
         )
         return df[required_cols]
+    except ConnectionError as e:
+        # 404 errors are common - API may be unreliable or stock has no dividend data
+        if "404" in str(e) or "Not Found" in str(e):
+            logging.warning(
+                f"Dividend data not available for {symbol} (404 - Not Found)"
+            )
+        else:
+            logging.error(f"Connection error fetching dividends for {symbol}: {e}")
+        return pd.DataFrame()
     except Exception as e:
         logging.error(f"Error fetching dividends for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
@@ -322,11 +331,13 @@ def fetch_news(symbol):
 
         # Price change metrics
         if "ref_price" in df.columns and "close_price" in df.columns:
-            df["price_change"] = pd.to_numeric(df["close_price"], errors="coerce") - pd.to_numeric(
-                df["ref_price"], errors="coerce"
-            )
+            df["price_change"] = pd.to_numeric(
+                df["close_price"], errors="coerce"
+            ) - pd.to_numeric(df["ref_price"], errors="coerce")
         if "price_change_pct" in df.columns:
-            df["price_change_ratio"] = pd.to_numeric(df["price_change_pct"], errors="coerce")
+            df["price_change_ratio"] = pd.to_numeric(
+                df["price_change_pct"], errors="coerce"
+            )
 
         # Derive source from link if available
         if "source" not in df.columns and "news_source_link" in df.columns:
@@ -341,9 +352,13 @@ def fetch_news(symbol):
         if "publish_date" in df.columns:
             try:
                 if pd.api.types.is_numeric_dtype(df["publish_date"]):
-                    df["publish_date"] = pd.to_datetime(df["publish_date"], unit="ms", errors="coerce")
+                    df["publish_date"] = pd.to_datetime(
+                        df["publish_date"], unit="ms", errors="coerce"
+                    )
                 else:
-                    df["publish_date"] = pd.to_datetime(df["publish_date"], errors="coerce")
+                    df["publish_date"] = pd.to_datetime(
+                        df["publish_date"], errors="coerce"
+                    )
             except Exception:
                 df["publish_date"] = pd.to_datetime(df["publish_date"], errors="coerce")
 
