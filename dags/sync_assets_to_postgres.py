@@ -13,7 +13,7 @@ Schedule: Nightly 3 AM
 
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import clickhouse_connect
 from supabase import create_client, Client
 import os
@@ -130,7 +130,7 @@ def sync_assets(**context):
             "metadata": row[col_idx["external_api_metadata"]]
             or {},  # supabase-py handles dict -> jsonb
             "source": row[col_idx["source"]] or None,
-            "updated_at": datetime.now(datetime.timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         assets_to_sync.append(asset_data)
 
