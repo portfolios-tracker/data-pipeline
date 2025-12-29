@@ -44,11 +44,12 @@
 #
 # Feel free to modify this file to suit your needs.
 ---
+name: portfolios-tracker-data-pipeline
 x-airflow-common: &airflow-common # Build custom image with your dependencies
   build:
     context: .
     dockerfile: Dockerfile
-  image: fin-sight-airflow:latest
+  image: portfolios-tracker-airflow:latest
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment: &airflow-common-env
