@@ -68,6 +68,7 @@ pytest -m "not slow"
 Test individual functions in isolation with mocked external dependencies.
 
 **test_fetcher.py:**
+
 - `clean_decimal_cols()` - Data cleaning for Decimal types
 - `fetch_stock_price()` - Stock price fetching with indicators
 - `fetch_financial_ratios()` - Financial ratios extraction
@@ -76,6 +77,7 @@ Test individual functions in isolation with mocked external dependencies.
 - `fetch_news()` - News article fetching (TODO)
 
 **test_notifications.py:**
+
 - `send_telegram_message()` - Telegram notification sending
 - `send_success_notification()` - Success callback wrapper
 - `send_failure_notification()` - Failure callback wrapper
@@ -108,10 +110,10 @@ def test_my_function():
     """Test description."""
     # Arrange
     input_data = ...
-    
+
     # Act
     result = my_function(input_data)
-    
+
     # Assert
     assert result == expected_value
 ```
@@ -134,7 +136,7 @@ def test_with_mock(mock_quote_class):
     mock_quote = Mock()
     mock_quote.history.return_value = pd.DataFrame(...)
     mock_quote_class.return_value = mock_quote
-    
+
     result = fetch_stock_price('HPG', '2024-01-01', '2024-01-10')
     assert not result.empty
 ```
@@ -170,6 +172,7 @@ See [conftest.py](conftest.py) for all available fixtures:
 **Status:** TODO - Add GitHub Actions workflow
 
 Planned workflow:
+
 ```yaml
 # .github/workflows/test.yml
 - Run pytest on every PR
@@ -226,6 +229,7 @@ def test_api_call():
 ## Next Steps (Roadmap)
 
 ### Phase 2: Expand Unit Tests
+
 - Complete `fetch_income_stmt()` tests
 - Complete `fetch_dividends()` tests
 - Complete `fetch_news()` tests
@@ -233,18 +237,21 @@ def test_api_call():
 - Test data transformation edge cases
 
 ### Phase 3: Integration Tests
+
 - DAG structure validation
 - Task dependency validation
 - End-to-end pipeline tests
 - ClickHouse schema validation
 
 ### Phase 4: Data Quality Tests
+
 - Duplicate record detection
 - Data range validation
 - Technical indicator verification
 - Cross-table consistency checks
 
 ### Phase 5: CI/CD Setup
+
 - GitHub Actions workflow
 - Automated test runs on PR
 - Coverage reporting
