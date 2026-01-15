@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test Runner Script for Fin-Sight
+# Test Runner Script for Portfolios Tracker
 # This script helps run tests in various configurations
 
 set -e  # Exit on error
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --docker)
             echo -e "${YELLOW}Running tests in Docker container...${NC}"
-            docker exec -it fin-sight-airflow-worker-1 bash -c "cd /opt/airflow && pytest $@"
+            docker exec -it portfolios-tracker-airflow-worker-1 bash -c "cd /opt/airflow && pytest $@"
             exit $?
             ;;
         *)
@@ -111,7 +111,7 @@ fi
 
 # Print header
 echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}    Fin-Sight Test Suite Runner      ${NC}"
+echo -e "${GREEN}    Portfolios Tracker Test Suite Runner      ${NC}"
 echo -e "${GREEN}======================================${NC}"
 echo ""
 echo -e "Command: ${YELLOW}$PYTEST_CMD${NC}"

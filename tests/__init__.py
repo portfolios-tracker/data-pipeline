@@ -1,7 +1,7 @@
 """
-Fin-Sight Test Suite
+Portfolios Tracker Test Suite
 
-This package contains all automated tests for the Fin-Sight project.
+This package contains all automated tests for the Portfolios Tracker project.
 
 Structure:
 - unit/: Unit tests for individual functions

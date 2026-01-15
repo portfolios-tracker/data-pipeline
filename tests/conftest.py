@@ -1,5 +1,5 @@
 """
-Pytest configuration and shared fixtures for Fin-Sight tests.
+Pytest configuration and shared fixtures for Portfolios Tracker tests.
 
 This module provides common fixtures used across all tests:
 - Mock environment variables

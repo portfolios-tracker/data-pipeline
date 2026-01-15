@@ -1,8 +1,8 @@
-# Fin-Sight Testing Suite
+# Portfolios Tracker Testing Suite
 
 ## Overview
 
-This directory contains comprehensive automated tests for the Fin-Sight project, covering unit tests, integration tests, and data quality validation.
+This directory contains comprehensive automated tests for the Portfolios Tracker project, covering unit tests, integration tests, and data quality validation.
 
 ## Test Structure
 
@@ -31,7 +31,7 @@ tests/
 pytest
 
 # Or inside Docker container
-docker exec -it fin-sight-airflow-worker-1 pytest
+docker exec -it portfolios-tracker-airflow-worker-1 pytest
 ```
 
 ### Run Specific Test File
@@ -197,11 +197,11 @@ pytest
 
 ```bash
 # Install test dependencies in container
-docker exec -it fin-sight-airflow-worker-1 \
+docker exec -it portfolios-tracker-airflow-worker-1 \
   pip install -r requirements.txt
 
 # Run tests
-docker exec -it fin-sight-airflow-worker-1 pytest
+docker exec -it portfolios-tracker-airflow-worker-1 pytest
 ```
 
 ### Mock API Not Working
