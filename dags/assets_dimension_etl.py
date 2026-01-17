@@ -228,32 +228,51 @@ def fetch_us_stocks(**context):
 
 def fetch_crypto(**context):
     """
-    Fetch top 100 crypto from CoinGecko
+    Fetch top 500 crypto from CoinGecko
     → asset_class = 'CRYPTO', market = '' (empty/NULL)
+    NOTE: 'coingecko_id' in metadata is CRITICAL for MarketDataService price fetching.
     """
     from pycoingecko import CoinGeckoAPI
+    import time
 
     client = get_clickhouse_client()
     cg = CoinGeckoAPI()
 
-    logger.info("Fetching top 100 crypto from CoinGecko...")
+    logger.info("Fetching top 500 crypto from CoinGecko...")
 
-    coins = cg.get_coins_markets(
-        vs_currency="usd",
-        order="market_cap_desc",
-        per_page=100,
-        page=1,
-        sparkline=False,
-    )
+    all_coins = []
+    # Fetch top 500 (2 pages of 250)
+    for page in range(1, 3):
+        try:
+            logger.info(f"Fetching page {page}...")
+            coins = cg.get_coins_markets(
+                vs_currency="usd",
+                order="market_cap_desc",
+                per_page=250,
+                page=page,
+                sparkline=False,
+            )
+            all_coins.extend(coins)
+            time.sleep(1) # Rate limit protection
+        except Exception as e:
+            logger.error(f"Failed to fetch page {page}: {e}")
 
-    logger.info(f"Fetched {len(coins)} crypto assets")
+    logger.info(f"Fetched {len(all_coins)} crypto assets")
 
     # Known stablecoins
-    stablecoins = {"USDT", "USDC", "DAI", "BUSD", "TUSD", "USDD", "FRAX", "USDP"}
+    stablecoins = {"USDT", "USDC", "DAI", "BUSD", "TUSD", "USDD", "FRAX", "USDP", "PYUSD"}
 
     records = []
-    for coin in coins:
+    # Track symbols to prevent duplicates if any
+    seen_symbols = set()
+
+    for coin in all_coins:
         symbol_upper = coin["symbol"].upper()
+        
+        if symbol_upper in seen_symbols:
+            continue
+        seen_symbols.add(symbol_upper)
+
         is_stable = "1" if symbol_upper in stablecoins else "0"
 
         records.append(
