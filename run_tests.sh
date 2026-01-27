@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Build pytest command
-PYTEST_CMD="pytest"
+PYTEST_CMD="uv run pytest"
 
 # Add specific file if provided
 if [ -n "$SPECIFIC_FILE" ]; then

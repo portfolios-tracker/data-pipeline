@@ -13,12 +13,25 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Switch back to airflow user
 USER airflow
 
-# Copy requirements
-COPY requirements.txt /requirements.txt
 
-# Install packages
-# Using --no-cache-dir to keep image size small
-RUN pip install --no-cache-dir -r /requirements.txt
+
+# Copy dependency files
+
+COPY pyproject.toml uv.lock /opt/airflow/ 
+
+
+
+# Install packages using uv
+
+
+
+# We use --system to install into the image's python environment
+
+
+RUN uv pip install --system --no-cache .
