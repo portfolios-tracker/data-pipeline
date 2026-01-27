@@ -4,6 +4,7 @@ import logging
 import numpy as np
 from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
+from .cache import cached_data
 
 
 def clean_decimal_cols(df, cols):
@@ -22,6 +23,7 @@ def clean_decimal_cols(df, cols):
     return df
 
 
+@cached_data(ttl_seconds=43200)  # 12 hours
 def fetch_stock_price(symbol, start_date, end_date):
     logging.info(f"Attempting fetch for {symbol}...")
     df = pd.DataFrame()
@@ -109,6 +111,7 @@ def fetch_stock_price(symbol, start_date, end_date):
     return df
 
 
+@cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_financial_ratios(symbol):
     logging.info(f"Fetching ratios for {symbol}...")
     try:
@@ -188,6 +191,7 @@ def fetch_financial_ratios(symbol):
         return pd.DataFrame()
 
 
+@cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_income_stmt(symbol):
     """
     Fetches income statement.
@@ -262,6 +266,7 @@ def fetch_income_stmt(symbol):
         return pd.DataFrame()
 
 
+@cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_dividends(symbol):
     try:
         company = Company(symbol=symbol, source="TCBS")
@@ -303,6 +308,7 @@ def fetch_dividends(symbol):
         return pd.DataFrame()
 
 
+@cached_data(ttl_seconds=3600)  # 1 hour
 def fetch_news(symbol):
     try:
         # TCBS public API has been deprecated; switch to VCI
