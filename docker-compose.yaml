@@ -72,6 +72,7 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     # Performance
     NUMBA_CACHE_DIR: /tmp
     # API Keys (loaded from .env)
+    NESTJS_API_URL: "${NESTJS_API_URL:-http://host.docker.internal:3000}"
     TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
     TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
     GEMINI_API_KEY: "${GEMINI_API_KEY}"
@@ -193,7 +194,7 @@ services:
   # CLICKHOUSE INIT
   clickhouse-init:
     <<: *airflow-common
-    command: python /opt/airflow/scripts/init_clickhouse.py
+    command: python /opt/airflow/scripts/init_clickhouse_schema.py
     restart: on-failure:3
     depends_on:
       clickhouse-server:
