@@ -17,21 +17,21 @@ RUN apt-get update && \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Switch back to airflow user
+
 USER airflow
 
 
 
 # Copy dependency files
 
-COPY pyproject.toml uv.lock /opt/airflow/ 
+COPY services/data-pipeline/pyproject.toml services/data-pipeline/uv.lock /opt/airflow/ 
 
 
 
 # Install packages using uv
 
-
-
 # We use --system to install into the image's python environment
 
+WORKDIR /opt/airflow
 
-RUN uv pip install --system --no-cache .
+RUN --mount=type=cache,id=uv,target=/opt/airflow/.cache/uv uv pip install --system --no-cache .
