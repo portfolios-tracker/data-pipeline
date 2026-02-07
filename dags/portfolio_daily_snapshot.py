@@ -27,7 +27,7 @@ from etl_modules.notifications import (
 )
 
 # Configuration
-API_BASE_URL = os.getenv("NESTJS_API_URL", "http://api:3000")
+API_BASE_URL = os.getenv("NESTJS_API_URL", "http://localhost:3001")
 DATA_PIPELINE_API_KEY = os.getenv("DATA_PIPELINE_API_KEY", "")
 
 default_args = {

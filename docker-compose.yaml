@@ -76,7 +76,7 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     # Performance
     NUMBA_CACHE_DIR: /tmp
     # API Keys (loaded from .env)
-    NESTJS_API_URL: "${NESTJS_API_URL:-http://host.docker.internal:3000}"
+    NESTJS_API_URL: "${NESTJS_API_URL:-http://host.docker.internal:3001}"
     TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
     TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
     GEMINI_API_KEY: "${GEMINI_API_KEY}"
