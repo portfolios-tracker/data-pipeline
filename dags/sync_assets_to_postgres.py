@@ -92,11 +92,11 @@ def sync_assets(**context):
 
     # 3. Connect to Supabase
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
 
     if not url or not key:
         raise ValueError(
-            "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variable not set"
+            "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY environment variable not set"
         )
 
     logger.info("Connecting to Supabase...")

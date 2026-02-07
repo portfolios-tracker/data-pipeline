@@ -73,4 +73,4 @@ Key environment variables in `.env`:
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: For alert notifications.
 - `GEMINI_API_KEY`: For AI-powered news summarization.
 - `DATA_PIPELINE_API_KEY`: Internal authentication for NestJS API calls.
-- `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`: Application database access.
+- `SUPABASE_URL` / `SUPABASE_SECRET_OR_SERVICE_ROLE_KEY`: Application database access.
