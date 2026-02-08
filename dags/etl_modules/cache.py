@@ -8,15 +8,28 @@ import pandas as pd
 from datetime import timedelta
 
 # Configuration
+REDIS_URL = os.getenv("REDIS_URL")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
 # Initialize Redis client
 try:
-    redis_client = redis.Redis(
-        host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=False
-    )
+    if REDIS_URL:
+        # Upstash/Cloud Redis (URL-based)
+        logging.info("Connecting to Redis using REDIS_URL")
+        redis_client = redis.from_url(REDIS_URL, decode_responses=False)
+    else:
+        # Self-hosted/Local Redis
+        logging.info(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}")
+        redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            db=REDIS_DB,
+            decode_responses=False,
+        )
     # Test connection
     redis_client.ping()
     logging.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
@@ -68,7 +81,9 @@ def cached_data(ttl_seconds=3600):
                 elif result is None:
                     pass
                 else:
-                    redis_client.setex(key, timedelta(seconds=ttl_seconds), pickle.dumps(result))
+                    redis_client.setex(
+                        key, timedelta(seconds=ttl_seconds), pickle.dumps(result)
+                    )
                     logging.debug(f"Cache SET for {func.__name__}")
             except Exception as e:
                 logging.warning(f"Error writing to cache for {func.__name__}: {e}")
