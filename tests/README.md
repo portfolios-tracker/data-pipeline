@@ -158,7 +158,7 @@ See [conftest.py](conftest.py) for all available fixtures:
 
 ## Coverage Goals
 
-- **Target:** 80% code coverage minimum
+- **Target:** 50% code coverage minimum
 - **Current Status:** Phase 1 implemented (foundation + core functions)
 - **Priority Areas:**
   - ✅ `clean_decimal_cols()` - 100% coverage
@@ -177,7 +177,7 @@ Planned workflow:
 # .github/workflows/test.yml
 - Run pytest on every PR
 - Generate coverage report
-- Block merge if coverage < 80%
+- Block merge if coverage < 50%
 - Upload coverage to Codecov
 ```
 
