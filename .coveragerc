@@ -20,6 +20,7 @@ omit =
 
 # Run tests in parallel
 parallel = True
+relative_files = True
 
 [report]
 # Precision for coverage percentage
