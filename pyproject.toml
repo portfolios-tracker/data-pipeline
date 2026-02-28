@@ -11,6 +11,7 @@ dependencies = [
     "apache-airflow-providers-telegram>=4.9.2",
     "asyncpg>=0.31.0",
     "clickhouse-connect>=0.10.0",
+    "google-genai>=1.65.0",
     "google-generativeai>=0.8.6",
     "lxml>=6.0.2",
     "numpy>=2.2.6",

@@ -10,17 +10,18 @@ Bonus: Backfills empty description field in ClickHouse dim_assets.
 Schedule: Weekly Sunday 4 AM (after assets_dimension_etl at 2 AM)
 """
 
-from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
-from datetime import datetime, timedelta, timezone
-import os
 import logging
+import os
 import time
+from datetime import datetime, timedelta, timezone
 
 import clickhouse_connect
-from openai import OpenAI
-from supabase import create_client, Client
+import google.generativeai as genai
+from airflow import DAG
+from airflow.providers.standard.operators.python import PythonOperator
 from vnstock import Company
+
+from supabase import Client, create_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ default_args = {
 dag = DAG(
     "ingest_company_intelligence",
     default_args=default_args,
-    description="Ingest VN company profiles → OpenAI embeddings → Supabase pgvector",
+    description="Ingest VN company profiles → Gemini embeddings → Supabase pgvector",
     schedule="0 4 * * 0",
     catchup=False,
     tags=["ai", "embeddings", "company", "supabase", "pgvector"],
@@ -64,7 +65,9 @@ def get_supabase_client() -> Client:
     return create_client(url, key)
 
 
-def build_embedding_text(company_profile: str, icb_name2: str, icb_name3: str, icb_name4: str) -> str:
+def build_embedding_text(
+    company_profile: str, icb_name2: str, icb_name3: str, icb_name4: str
+) -> str:
     """
     Concatenate company profile text with sector taxonomy for embedding.
 
@@ -123,15 +126,17 @@ def fetch_company_profiles(**context):
                 time.sleep(0.5)
                 continue
 
-            profiles.append({
-                "ticker_symbol": symbol,
-                "exchange": exchange,
-                "content_type": "company_profile",
-                "company_profile": company_profile,
-                "icb_name2": icb_name2,
-                "icb_name3": icb_name3,
-                "icb_name4": icb_name4,
-            })
+            profiles.append(
+                {
+                    "ticker_symbol": symbol,
+                    "exchange": exchange,
+                    "content_type": "company_profile",
+                    "company_profile": company_profile,
+                    "icb_name2": icb_name2,
+                    "icb_name3": icb_name3,
+                    "icb_name4": icb_name4,
+                }
+            )
 
             if (idx + 1) % 50 == 0:
                 logger.info(f"Processed {idx + 1}/{len(tickers)} tickers...")
@@ -149,19 +154,21 @@ def fetch_company_profiles(**context):
 
 def generate_and_upsert_embeddings(**context):
     """
-    Task 2 + 3: Generate embeddings via OpenAI text-embedding-3-small and upsert to Supabase.
+    Task 2 + 3: Generate embeddings via Gemini gemini-embedding-001 and upsert to Supabase.
 
     - Batches embedding API calls in groups of 100
     - Upserts to Supabase company_embeddings in batches of 100
     - Includes ICB sector metadata in JSONB
     """
-    profiles = context["ti"].xcom_pull(key="profiles", task_ids="fetch_company_profiles")
+    profiles = context["ti"].xcom_pull(
+        key="profiles", task_ids="fetch_company_profiles"
+    )
 
     if not profiles:
         logger.warning("No profiles received from XCom, skipping embeddings")
         return 0
 
-    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     supabase = get_supabase_client()
 
     texts = [
@@ -177,47 +184,56 @@ def generate_and_upsert_embeddings(**context):
     batch_size = 100
 
     for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i: i + batch_size]
+        batch_texts = texts[i : i + batch_size]
         try:
-            response = openai_client.embeddings.create(
-                model="text-embedding-3-small",
-                input=batch_texts,
+            response = client.models.embed_content(
+                model="text-embedding-004",
+                contents=batch_texts,
+                config={"task_type": "CLUSTERING"},
             )
-            batch_embeddings = [item.embedding for item in response.data]
+            batch_embeddings = [ebd.values for ebd in response.embeddings]
             all_embeddings.extend(batch_embeddings)
-            logger.info(f"Generated embeddings batch {i // batch_size + 1}: {len(all_embeddings)}/{len(texts)}")
+            logger.info(
+                f"Generated embeddings batch {i // batch_size + 1}: {len(all_embeddings)}/{len(texts)}"
+            )
         except Exception as e:
-            logger.error(f"Failed to generate embeddings for batch starting at {i}: {e}")
+            logger.error(
+                f"Failed to generate embeddings for batch starting at {i}: {e}"
+            )
             raise
 
-    logger.info(f"Upserting {len(all_embeddings)} records to Supabase company_embeddings...")
+    logger.info(
+        f"Upserting {len(all_embeddings)} records to Supabase company_embeddings..."
+    )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     records = []
 
     for profile, text, embedding in zip(profiles, texts, all_embeddings):
-        records.append({
-            "ticker_symbol": profile["ticker_symbol"],
-            "exchange": profile["exchange"],
-            "content_type": profile["content_type"],
-            "content": text,
-            "embedding": embedding,
-            "metadata": {
-                "icb_name2": profile["icb_name2"],
-                "icb_name3": profile["icb_name3"],
-                "icb_name4": profile["icb_name4"],
-                "source": "vnstock_vci",
-            },
-            "updated_at": now_iso,
-        })
+        records.append(
+            {
+                "ticker_symbol": profile["ticker_symbol"],
+                "exchange": profile["exchange"],
+                "content_type": profile["content_type"],
+                "content": text,
+                "embedding": embedding,
+                "metadata": {
+                    "icb_name2": profile["icb_name2"],
+                    "icb_name3": profile["icb_name3"],
+                    "icb_name4": profile["icb_name4"],
+                    "source": "vnstock_vci_gemini",
+                },
+                "updated_at": now_iso,
+            }
+        )
 
     total_upserted = 0
 
     for i in range(0, len(records), batch_size):
-        batch = records[i: i + batch_size]
+        batch = records[i : i + batch_size]
         try:
             supabase.table("company_embeddings").upsert(
-                batch, ignore_duplicates=False
+                batch, ignore_duplicates=False, on_conflict="ticker_symbol,content_type"
             ).execute()
             total_upserted += len(batch)
             logger.info(
@@ -240,7 +256,9 @@ def backfill_dim_assets_description(**context):
 
     Uses ReplacingMergeTree-compatible insert with OPTIMIZE to deduplicate.
     """
-    profiles = context["ti"].xcom_pull(key="profiles", task_ids="fetch_company_profiles")
+    profiles = context["ti"].xcom_pull(
+        key="profiles", task_ids="fetch_company_profiles"
+    )
 
     if not profiles:
         logger.info("No profiles available for backfill, skipping")
@@ -260,7 +278,9 @@ def backfill_dim_assets_description(**context):
     result = ch_client.query(query)
     empty_desc_symbols = {row[0] for row in result.result_rows}
 
-    logger.info(f"Found {len(empty_desc_symbols)} tickers with empty description in dim_assets")
+    logger.info(
+        f"Found {len(empty_desc_symbols)} tickers with empty description in dim_assets"
+    )
 
     backfill_count = 0
 

@@ -7,11 +7,9 @@ Tests cover:
 - Rate limiting behaviour (sleep between API calls)
 """
 
-import time
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-
 from dags.ingest_company_intelligence import build_embedding_text
 
 
@@ -88,9 +86,7 @@ class TestBatchProcessing:
 
     @patch("dags.ingest_company_intelligence.time.sleep")
     @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_rate_limiting_sleep_called_between_tickers(
-        self, mock_get_ch, mock_sleep
-    ):
+    def test_rate_limiting_sleep_called_between_tickers(self, mock_get_ch, mock_sleep):
         """
         Verifies 0.5s sleep is called after each ticker regardless of success or failure.
         """
@@ -121,9 +117,8 @@ class TestBatchProcessing:
     @patch("dags.ingest_company_intelligence.get_clickhouse_client")
     def test_skips_ticker_with_empty_overview(self, mock_get_ch):
         """Tickers with empty vnstock overview are skipped, not added to profiles."""
-        from dags.ingest_company_intelligence import fetch_company_profiles
-
         import pandas as pd
+        from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_ch = MagicMock()
         mock_result = Mock()
@@ -149,9 +144,8 @@ class TestBatchProcessing:
     @patch("dags.ingest_company_intelligence.get_clickhouse_client")
     def test_skips_ticker_with_empty_company_profile_field(self, mock_get_ch):
         """Tickers whose overview row has an empty company_profile string are skipped."""
-        from dags.ingest_company_intelligence import fetch_company_profiles
-
         import pandas as pd
+        from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_ch = MagicMock()
         mock_result = Mock()
@@ -165,7 +159,14 @@ class TestBatchProcessing:
         with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
             mock_company = MagicMock()
             mock_company.overview.return_value = pd.DataFrame(
-                [{"company_profile": "", "icb_name2": "Tech", "icb_name3": "", "icb_name4": ""}]
+                [
+                    {
+                        "company_profile": "",
+                        "icb_name2": "Tech",
+                        "icb_name3": "",
+                        "icb_name4": "",
+                    }
+                ]
             )
             mock_company_cls.return_value = mock_company
 
@@ -177,9 +178,8 @@ class TestBatchProcessing:
     @patch("dags.ingest_company_intelligence.get_clickhouse_client")
     def test_logs_progress_every_50_tickers(self, mock_get_ch):
         """Progress is logged at index 49 (50th ticker processed)."""
-        from dags.ingest_company_intelligence import fetch_company_profiles
-
         import pandas as pd
+        from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_ch = MagicMock()
         mock_result = Mock()
@@ -193,7 +193,14 @@ class TestBatchProcessing:
         with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
             mock_company = MagicMock()
             mock_company.overview.return_value = pd.DataFrame(
-                [{"company_profile": "Profile text", "icb_name2": "A", "icb_name3": "B", "icb_name4": "C"}]
+                [
+                    {
+                        "company_profile": "Profile text",
+                        "icb_name2": "A",
+                        "icb_name3": "B",
+                        "icb_name4": "C",
+                    }
+                ]
             )
             mock_company_cls.return_value = mock_company
 
@@ -206,8 +213,8 @@ class TestBatchProcessing:
         assert len(progress_logs) >= 1
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_embeddings_batched_in_groups_of_100(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_embeddings_batched_in_groups_of_100(self, mock_genai, mock_get_supabase):
         """OpenAI embeddings.create is called in batches of 100."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
@@ -228,29 +235,30 @@ class TestBatchProcessing:
         mock_ti.xcom_pull.return_value = profiles
         context = {"ti": mock_ti}
 
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
+        def make_embedding_response(model, contents, config=None):
+            mock_resp = MagicMock()
+            mock_resp.embeddings = [MagicMock(values=[0.1] * 768) for _ in contents]
+            return mock_resp
 
-        def make_embedding_response(model, input):
-            return MagicMock(
-                data=[MagicMock(embedding=[0.1] * 1536) for _ in input]
-            )
-
-        mock_openai.embeddings.create.side_effect = make_embedding_response
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.embed_content.side_effect = make_embedding_response
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = (
+            MagicMock()
+        )
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             result = generate_and_upsert_embeddings(**context)
 
-        assert mock_openai.embeddings.create.call_count == 3
+        assert mock_client.models.embed_content.call_count == 3
         assert result == 250
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_upsert_batched_in_groups_of_100(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_upsert_batched_in_groups_of_100(self, mock_genai, mock_get_supabase):
         """Supabase upsert is called in batches of 100."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
@@ -266,30 +274,35 @@ class TestBatchProcessing:
             }
             for i in range(150)
         ]
-
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = profiles
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
         context = {"ti": mock_ti}
 
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        mock_openai.embeddings.create.side_effect = lambda model, input: MagicMock(
-            data=[MagicMock(embedding=[0.0] * 1536) for _ in input]
-        )
+        def make_embedding_response(*args, **kwargs):
+            contents = kwargs.get("contents", [])
+            mock_resp = MagicMock()
+            mock_resp.embeddings = [MagicMock(values=[0.0] * 768) for _ in contents]
+            return mock_resp
+
+        mock_client.models.embed_content.side_effect = make_embedding_response
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
         mock_table = mock_supabase.table.return_value
         mock_table.upsert.return_value.execute.return_value = MagicMock()
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             generate_and_upsert_embeddings(**context)
 
         assert mock_table.upsert.call_count == 2
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_upsert_record_includes_required_fields(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_upsert_record_includes_required_fields(
+        self, mock_genai, mock_get_supabase
+    ):
         """Each upserted record contains all required fields with correct values."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
@@ -306,13 +319,12 @@ class TestBatchProcessing:
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = [profile]
         context = {"ti": mock_ti}
-
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        fake_embedding = [0.42] * 1536
-        mock_openai.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=fake_embedding)]
-        )
+        fake_embedding = [0.42] * 768
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [MagicMock(values=fake_embedding)]
+        mock_client.models.embed_content.return_value = mock_resp
 
         captured_records = []
         mock_supabase = MagicMock()
@@ -324,7 +336,7 @@ class TestBatchProcessing:
 
         mock_supabase.table.return_value.upsert.side_effect = capture_upsert
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             generate_and_upsert_embeddings(**context)
 
         assert len(captured_records) == 1
@@ -334,11 +346,11 @@ class TestBatchProcessing:
         assert rec["content_type"] == "company_profile"
         assert rec["embedding"] == fake_embedding
         assert rec["metadata"]["icb_name2"] == "Hàng tiêu dùng"
-        assert rec["metadata"]["source"] == "vnstock_vci"
+        assert rec["metadata"]["source"] == "vnstock_vci_gemini"
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_empty_profiles_xcom_skips_processing(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_empty_profiles_xcom_skips_processing(self, mock_genai, mock_get_supabase):
         """If no profiles in XCom, embeddings generation is skipped and returns 0."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
@@ -346,11 +358,11 @@ class TestBatchProcessing:
         mock_ti.xcom_pull.return_value = []
         context = {"ti": mock_ti}
 
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             result = generate_and_upsert_embeddings(**context)
 
         assert result == 0
-        mock_openai.embeddings.create.assert_not_called()
+        mock_client.models.embed_content.assert_not_called()

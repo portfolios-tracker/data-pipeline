@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-
 SAMPLE_PROFILES = [
     {
         "ticker_symbol": "VNM",
@@ -43,7 +42,7 @@ SAMPLE_PROFILES = [
     },
 ]
 
-FAKE_EMBEDDING = [0.01] * 1536
+FAKE_EMBEDDING = [0.01] * 768
 
 
 @pytest.mark.integration
@@ -67,22 +66,31 @@ class TestFetchCompanyProfilesIntegration:
 
         def fake_company_overview(symbol, source):
             profiles_map = {
-                "VNM": pd.DataFrame([{
-                    "company_profile": "Vinamilk profile",
-                    "icb_name2": "Consumer",
-                    "icb_name3": "Food",
-                    "icb_name4": "Dairy",
-                }]),
-                "HPG": pd.DataFrame([{
-                    "company_profile": "Hoa Phat profile",
-                    "icb_name2": "Industry",
-                    "icb_name3": "Materials",
-                    "icb_name4": "Metals",
-                }]),
+                "VNM": pd.DataFrame(
+                    [
+                        {
+                            "company_profile": "Vinamilk profile",
+                            "icb_name2": "Consumer",
+                            "icb_name3": "Food",
+                            "icb_name4": "Dairy",
+                        }
+                    ]
+                ),
+                "HPG": pd.DataFrame(
+                    [
+                        {
+                            "company_profile": "Hoa Phat profile",
+                            "icb_name2": "Industry",
+                            "icb_name3": "Materials",
+                            "icb_name4": "Metals",
+                        }
+                    ]
+                ),
             }
             return profiles_map.get(symbol, pd.DataFrame())
 
         with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
+
             def make_company(symbol, source):
                 obj = MagicMock()
                 obj.overview.return_value = fake_company_overview(symbol, source)
@@ -116,17 +124,22 @@ class TestFetchCompanyProfilesIntegration:
         context = {"ti": mock_ti}
 
         with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
+
             def make_company(symbol, source):
                 obj = MagicMock()
                 if symbol == "FAIL":
                     obj.overview.side_effect = ConnectionError("VCI source error")
                 else:
-                    obj.overview.return_value = pd.DataFrame([{
-                        "company_profile": "VNM profile",
-                        "icb_name2": "Consumer",
-                        "icb_name3": "Food",
-                        "icb_name4": "Dairy",
-                    }])
+                    obj.overview.return_value = pd.DataFrame(
+                        [
+                            {
+                                "company_profile": "VNM profile",
+                                "icb_name2": "Consumer",
+                                "icb_name3": "Food",
+                                "icb_name4": "Dairy",
+                            }
+                        ]
+                    )
                 return obj
 
             mock_company_cls.side_effect = make_company
@@ -166,9 +179,9 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
     """Integration tests for the generate_and_upsert_embeddings task."""
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
+    @patch("dags.ingest_company_intelligence.genai")
     def test_full_pipeline_produces_correct_embedding_count(
-        self, mock_openai_cls, mock_get_supabase
+        self, mock_genai, mock_get_supabase
     ):
         """End-to-end: profiles → embeddings → upserted records count matches."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
@@ -176,52 +189,58 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = SAMPLE_PROFILES
         context = {"ti": mock_ti}
-
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        mock_openai.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=FAKE_EMBEDDING) for _ in SAMPLE_PROFILES]
-        )
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [
+            MagicMock(values=FAKE_EMBEDDING) for _ in SAMPLE_PROFILES
+        ]
+        mock_client.models.embed_content.return_value = mock_resp
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = (
+            MagicMock()
+        )
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             result = generate_and_upsert_embeddings(**context)
 
         assert result == len(SAMPLE_PROFILES)
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_uses_text_embedding_3_small_model(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_uses_gemini_embedding_model(self, mock_genai, mock_get_supabase):
         """Verifies the correct OpenAI embedding model is used."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = SAMPLE_PROFILES
         context = {"ti": mock_ti}
-
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        mock_openai.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=FAKE_EMBEDDING) for _ in SAMPLE_PROFILES]
-        )
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [
+            MagicMock(values=FAKE_EMBEDDING) for _ in SAMPLE_PROFILES
+        ]
+        mock_client.models.embed_content.return_value = mock_resp
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = (
+            MagicMock()
+        )
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             generate_and_upsert_embeddings(**context)
 
-        call_kwargs = mock_openai.embeddings.create.call_args
-        assert call_kwargs[1]["model"] == "text-embedding-3-small"
+        call_kwargs = mock_client.models.embed_content.call_args
+        assert call_kwargs[1]["model"] == "text-embedding-004"
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
+    @patch("dags.ingest_company_intelligence.genai")
     def test_embedding_content_uses_full_concatenated_text(
-        self, mock_openai_cls, mock_get_supabase
+        self, mock_genai, mock_get_supabase
     ):
         """The text sent for embedding includes both company_profile and sector taxonomy."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
@@ -231,20 +250,24 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
         context = {"ti": mock_ti}
 
         captured_inputs = []
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
 
-        def capture_create(model, input):
-            captured_inputs.extend(input)
-            return MagicMock(data=[MagicMock(embedding=FAKE_EMBEDDING)])
+        def capture_embed(model, contents, config=None):
+            captured_inputs.extend(contents)
+            mock_resp = MagicMock()
+            mock_resp.embeddings = [MagicMock(values=FAKE_EMBEDDING)]
+            return mock_resp
 
-        mock_openai.embeddings.create.side_effect = capture_create
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.embed_content.side_effect = capture_embed
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = (
+            MagicMock()
+        )
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             generate_and_upsert_embeddings(**context)
 
         assert len(captured_inputs) == 1
@@ -254,49 +277,49 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
         assert "Sector:" in text
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_openai_failure_raises_exception(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_gemini_failure_raises_exception(self, mock_genai, mock_get_supabase):
         """An OpenAI API failure raises an exception and stops the task."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = SAMPLE_PROFILES
         context = {"ti": mock_ti}
-
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        mock_openai.embeddings.create.side_effect = Exception("OpenAI rate limit")
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.embed_content.side_effect = Exception("Gemini rate limit")
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
-            with pytest.raises(Exception, match="OpenAI rate limit"):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+            with pytest.raises(Exception, match="Gemini rate limit"):
                 generate_and_upsert_embeddings(**context)
 
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    @patch("dags.ingest_company_intelligence.OpenAI")
-    def test_supabase_upsert_failure_raises_exception(self, mock_openai_cls, mock_get_supabase):
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_supabase_upsert_failure_raises_exception(
+        self, mock_genai, mock_get_supabase
+    ):
         """A Supabase upsert failure raises an exception and stops the task."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = [SAMPLE_PROFILES[0]]
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [MagicMock(values=FAKE_EMBEDDING)]
+        mock_client.models.embed_content.return_value = mock_resp
         context = {"ti": mock_ti}
-
-        mock_openai = MagicMock()
-        mock_openai_cls.return_value = mock_openai
-        mock_openai.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=FAKE_EMBEDDING)]
-        )
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.upsert.return_value.execute.side_effect = Exception(
-            "Supabase connection refused"
+        mock_supabase.table.return_value.upsert.return_value.execute.side_effect = (
+            Exception("Supabase connection refused")
         )
 
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             with pytest.raises(Exception, match="Supabase connection refused"):
                 generate_and_upsert_embeddings(**context)
 
@@ -324,9 +347,7 @@ class TestBackfillDimAssetsDescriptionIntegration:
 
         assert result == 1
         calls_with_symbol = [
-            call
-            for call in mock_ch.command.call_args_list
-            if "VNM" in str(call)
+            call for call in mock_ch.command.call_args_list if "VNM" in str(call)
         ]
         assert len(calls_with_symbol) == 1
 
@@ -362,7 +383,6 @@ class TestBackfillDimAssetsDescriptionIntegration:
         backfill_dim_assets_description(**context)
 
         optimize_calls = [
-            call for call in mock_ch.command.call_args_list
-            if "OPTIMIZE" in str(call)
+            call for call in mock_ch.command.call_args_list if "OPTIMIZE" in str(call)
         ]
         assert len(optimize_calls) == 1
