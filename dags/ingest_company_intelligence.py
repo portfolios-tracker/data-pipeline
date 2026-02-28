@@ -2,8 +2,8 @@
 Company Intelligence Ingestion DAG
 Story: 1-2-semantic-knowledge-ingestion-airflow-and-supabase
 
-Fetches VN company profiles from vnstock (VCI source), generates 1536-dimensional
-embeddings via OpenAI text-embedding-3-small, and upserts to Supabase pgvector.
+Fetches VN company profiles from vnstock (VCI source), generates 768-dimensional
+embeddings via Gemini text-embedding-004, and upserts to Supabase pgvector.
 
 Bonus: Backfills empty description field in ClickHouse dim_assets.
 
@@ -154,7 +154,7 @@ def fetch_company_profiles(**context):
 
 def generate_and_upsert_embeddings(**context):
     """
-    Task 2 + 3: Generate embeddings via Gemini gemini-embedding-001 and upsert to Supabase.
+    Task 2 + 3: Generate embeddings via Gemini text-embedding-004 and upsert to Supabase.
 
     - Batches embedding API calls in groups of 100
     - Upserts to Supabase company_embeddings in batches of 100

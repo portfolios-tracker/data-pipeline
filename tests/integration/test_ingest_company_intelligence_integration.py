@@ -3,7 +3,7 @@ Integration tests for dags/ingest_company_intelligence.py
 
 Tests the full pipeline flow with mocked external services:
 - Mocked vnstock Company API
-- Mocked OpenAI Embeddings API
+- Mocked Gemini Embeddings API
 - Mocked Supabase upsert
 - Mocked ClickHouse client
 
@@ -211,7 +211,7 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
     @patch("dags.ingest_company_intelligence.get_supabase_client")
     @patch("dags.ingest_company_intelligence.genai")
     def test_uses_gemini_embedding_model(self, mock_genai, mock_get_supabase):
-        """Verifies the correct OpenAI embedding model is used."""
+        """Verifies the correct Gemini embedding model is used."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()
@@ -279,7 +279,7 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
     @patch("dags.ingest_company_intelligence.get_supabase_client")
     @patch("dags.ingest_company_intelligence.genai")
     def test_gemini_failure_raises_exception(self, mock_genai, mock_get_supabase):
-        """An OpenAI API failure raises an exception and stops the task."""
+        """A Gemini API failure raises an exception and stops the task."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()

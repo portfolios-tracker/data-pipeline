@@ -215,7 +215,7 @@ class TestBatchProcessing:
     @patch("dags.ingest_company_intelligence.get_supabase_client")
     @patch("dags.ingest_company_intelligence.genai")
     def test_embeddings_batched_in_groups_of_100(self, mock_genai, mock_get_supabase):
-        """OpenAI embeddings.create is called in batches of 100."""
+        """Gemini embed_content is called in batches of 100."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         profiles = [
