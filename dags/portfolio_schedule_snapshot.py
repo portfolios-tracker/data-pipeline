@@ -1,8 +1,8 @@
 """
-DAG: portfolio_daily_snapshot
+DAG: portfolio_schedule_snapshot
 ------------------------------
-Triggers daily batch snapshot for all portfolios via the NestJS API.
-Runs at 00:00 UTC daily.
+Triggers hourly batch snapshot for all eligible portfolios via the NestJS API.
+Runs every hour (24/7, UTC scheduler cadence).
 
 This DAG calls the NestJS API's batch snapshot endpoint which:
 1. Fetches all portfolios from the database
@@ -13,6 +13,7 @@ Architecture Notes:
 - The scheduling responsibility is with Airflow (as per architecture.md)
 - The business logic (iteration, snapshot capture) stays in NestJS
 - The API returns 202 Accepted immediately to avoid Airflow timeouts
+- Market-session filtering is NOT applied at DAG level in this phase
 """
 
 from airflow import DAG
@@ -37,13 +38,13 @@ default_args = {
 }
 
 with DAG(
-    dag_id="portfolio_daily_snapshot",
+    dag_id="portfolio_schedule_snapshot",
     default_args=default_args,
-    description="Capture daily portfolio snapshots for historical performance tracking",
-    schedule="@daily",  # Runs at 00:00 UTC daily
+    description="Capture hourly portfolio snapshots for historical performance tracking",
+    schedule="@hourly",  # Runs every hour (UTC)
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["portfolio", "snapshot", "batch", "daily"],
+    tags=["portfolio", "snapshot", "batch", "hourly"],
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
