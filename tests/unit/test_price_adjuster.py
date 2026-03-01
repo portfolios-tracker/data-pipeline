@@ -220,8 +220,13 @@ class TestMultipleEvents:
             13000.0 * self.fb, rel=1e-5
         )
 
-    def test_on_ex_dates_not_adjusted(self):
-        assert self.result.loc[date(2024, 3, 1), "adjusted_close"] == pytest.approx(12000.0)
+    def test_on_ex_dates_not_adjusted_by_own_event(self):
+        # ex-date A (2024-03-01) is NOT adjusted by its own Event A,
+        # but IS adjusted by the later Event B because 2024-03-01 < 2024-05-01 (Event B ex-date).
+        assert self.result.loc[date(2024, 3, 1), "adjusted_close"] == pytest.approx(
+            12000.0 * self.fb, rel=1e-5
+        )
+        # ex-date B (2024-05-01) is the latest event — nothing adjusts it.
         assert self.result.loc[date(2024, 5, 1), "adjusted_close"] == pytest.approx(14000.0)
 
     def test_after_all_events_unchanged(self):
