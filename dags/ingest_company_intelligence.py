@@ -91,7 +91,7 @@ def fetch_company_profiles(**context):
 
     query = """
     SELECT symbol, exchange
-    FROM market_dwh.dim_assets
+    FROM portfolios_tracker_dw.dim_assets
     WHERE asset_class = 'STOCK'
       AND market = 'VN'
       AND is_active = 1
@@ -268,7 +268,7 @@ def backfill_dim_assets_description(**context):
 
     query = """
     SELECT symbol
-    FROM market_dwh.dim_assets
+    FROM portfolios_tracker_dw.dim_assets
     WHERE asset_class = 'STOCK'
       AND market = 'VN'
       AND is_active = 1
@@ -295,19 +295,13 @@ def backfill_dim_assets_description(**context):
 
         try:
             ch_client.command(
-                "ALTER TABLE market_dwh.dim_assets UPDATE description = {desc:String} "
+                "ALTER TABLE portfolios_tracker_dw.dim_assets UPDATE description = {desc:String} "
                 "WHERE symbol = {symbol:String} AND market = 'VN' AND asset_class = 'STOCK'",
                 parameters={"desc": company_profile, "symbol": symbol},
             )
             backfill_count += 1
         except Exception as e:
             logger.warning(f"Failed to backfill description for {symbol}: {e}")
-
-    if backfill_count > 0:
-        try:
-            ch_client.command("OPTIMIZE TABLE market_dwh.dim_assets FINAL")
-        except Exception as e:
-            logger.warning(f"OPTIMIZE TABLE failed (non-critical): {e}")
 
     logger.info(f"Backfilled description for {backfill_count} tickers in dim_assets")
     return backfill_count

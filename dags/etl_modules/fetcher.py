@@ -1,10 +1,48 @@
 import pandas as pd
 import pandas_ta as ta
 import logging
+import os
 import numpy as np
+import clickhouse_connect
 from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
 from .cache import cached_data
+
+
+# ---------------------------------------------------------------------------
+# Fallback ticker list used when ClickHouse is unreachable during DAG parsing
+# ---------------------------------------------------------------------------
+_FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
+
+
+def get_active_vn_tickers() -> list[str]:
+    """
+    Return active VN stock tickers from ClickHouse dim_assets.
+
+    Falls back to a hardcoded seed list when ClickHouse is not reachable
+    (e.g. during DAG file parsing on Airflow startup).
+    """
+    try:
+        client = clickhouse_connect.get_client(
+            host=os.getenv("CLICKHOUSE_HOST", "clickhouse-server"),
+            port=int(os.getenv("CLICKHOUSE_PORT", 8123)),
+            username=os.getenv("CLICKHOUSE_USER", "default"),
+            password=os.getenv("CLICKHOUSE_PASSWORD", ""),
+        )
+        result = client.query(
+            "SELECT symbol "
+            "FROM portfolios_tracker_dw.dim_assets FINAL "
+            "WHERE asset_class = 'STOCK' AND market = 'VN' AND is_active = 1 "
+            "ORDER BY symbol"
+        )
+        tickers = [row[0] for row in result.result_rows]
+        if tickers:
+            logging.info(f"Loaded {len(tickers)} active VN tickers from dim_assets")
+            return tickers
+    except Exception as e:
+        logging.warning(f"Could not query dim_assets, using fallback list: {e}")
+
+    return list(_FALLBACK_VN_TICKERS)
 
 
 def clean_decimal_cols(df, cols):
@@ -305,6 +343,71 @@ def fetch_dividends(symbol):
         return pd.DataFrame()
     except Exception as e:
         logging.error(f"Error fetching dividends for {symbol}: {e}", exc_info=True)
+        return pd.DataFrame()
+
+
+@cached_data(ttl_seconds=43200)  # 12 hours
+def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetch historical prices for a VN index (e.g. VNINDEX, VN30, HNXINDEX)
+    using vnstock's stock quote API with the VCI source.
+
+    The index is treated as a zero-dividend synthetic asset:
+    adjusted_close == raw_close (no corporate action adjustment needed).
+    Rows are stored in portfolios_tracker_dw.fact_stock_daily with source='vnstock_index'.
+
+    Parameters
+    ----------
+    symbol : str
+        Index ticker, e.g. 'VNINDEX', 'VN30', 'HNXINDEX'.
+    start_date : str
+        ISO date string, e.g. '2020-01-01'.
+    end_date : str
+        ISO date string, e.g. '2024-12-31'.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns matching fact_stock_daily schema with indicator columns set to 0.
+    """
+    logging.info("Fetching index history for %s (%s → %s)", symbol, start_date, end_date)
+    try:
+        from vnstock import Vnstock
+
+        stock = Vnstock().stock(symbol=symbol, source="VCI")
+        df = stock.quote.history(start=start_date, end=end_date, interval="1D")
+        if df is None or df.empty:
+            raise ValueError(f"Empty data returned for index {symbol}")
+
+        df.columns = [c.lower() for c in df.columns]
+        df.rename(columns={"time": "trading_date", "date": "trading_date"}, inplace=True)
+
+        if not pd.api.types.is_datetime64_any_dtype(df["trading_date"]):
+            df["trading_date"] = pd.to_datetime(df["trading_date"])
+        df["trading_date"] = df["trading_date"].dt.date
+
+        df["ticker"] = symbol
+        df["source"] = "vnstock_index"
+
+        df = clean_decimal_cols(df, ["open", "high", "low", "close"])
+        df["volume"] = df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
+
+        # Technical indicators are not meaningful for indices in this context; set to 0.
+        for col in ["ma_50", "ma_200", "rsi_14", "daily_return", "macd", "macd_signal", "macd_hist"]:
+            df[col] = 0.0
+
+        required_cols = [
+            "ticker", "trading_date", "open", "high", "low", "close", "volume",
+            "ma_50", "ma_200", "rsi_14", "daily_return", "macd", "macd_signal", "macd_hist",
+            "source",
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = 0
+        return df[required_cols]
+
+    except Exception as e:
+        logging.error("Error fetching index history for %s: %s", symbol, e, exc_info=True)
         return pd.DataFrame()
 
 

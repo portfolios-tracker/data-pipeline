@@ -123,8 +123,7 @@ def fetch_vn_stocks(**context):
 
     df_ch = pd.DataFrame(records)
 
-    client.insert_df("market_dwh.dim_assets", df_ch)
-    client.command("OPTIMIZE TABLE market_dwh.dim_assets FINAL")
+    client.insert_df("portfolios_tracker_dw.dim_assets", df_ch)
 
     logger.info(f"✅ Inserted {len(df_ch)} VN stocks (asset_class=STOCK, market=VN)")
     return len(df_ch)
@@ -219,8 +218,7 @@ def fetch_us_stocks(**context):
 
     df_ch = pd.DataFrame(records)
 
-    client.insert_df("market_dwh.dim_assets", df_ch)
-    client.command("OPTIMIZE TABLE market_dwh.dim_assets FINAL")
+    client.insert_df("portfolios_tracker_dw.dim_assets", df_ch)
 
     logger.info(f"✅ Inserted {len(df_ch)} US stocks (asset_class=STOCK, market=US)")
     return len(df_ch)
@@ -301,8 +299,7 @@ def fetch_crypto(**context):
 
     df = pd.DataFrame(records)
 
-    client.insert_df("market_dwh.dim_assets", df)
-    client.command("OPTIMIZE TABLE market_dwh.dim_assets FINAL")
+    client.insert_df("portfolios_tracker_dw.dim_assets", df)
 
     logger.info(f"✅ Inserted {len(df)} crypto (asset_class=CRYPTO)")
     return len(df)

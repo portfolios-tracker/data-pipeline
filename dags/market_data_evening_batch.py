@@ -16,6 +16,7 @@ from etl_modules.fetcher import (
     fetch_financial_ratios,
     fetch_dividends,
     fetch_income_stmt,
+    get_active_vn_tickers,
 )
 from etl_modules.notifications import (
     send_success_notification,
@@ -23,7 +24,6 @@ from etl_modules.notifications import (
 )
 
 # CONFIG
-STOCKS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
@@ -52,7 +52,8 @@ with DAG(
     @task
     def extract_prices():
         price_data = []
-        print("RUNNING DAILY INCREMENTAL (7 DAYS)")
+        tickers = get_active_vn_tickers()
+        print(f"RUNNING DAILY INCREMENTAL (7 DAYS) for {len(tickers)} tickers")
         # Fetch 250 days for indicator calculation, but only keep last 7 days
         lookback_date = (datetime.today() - timedelta(days=250)).strftime("%Y-%m-%d")
         end_date = datetime.today().strftime("%Y-%m-%d")
@@ -61,7 +62,7 @@ with DAG(
             f"Fetching prices from {lookback_date} to {end_date} (will filter to last 7 days)"
         )
 
-        for ticker in STOCKS:
+        for ticker in tickers:
             df_price = fetch_stock_price(ticker, lookback_date, end_date)
             if not df_price.empty:
                 # Filter to only last 7 days for insertion
@@ -120,19 +121,19 @@ with DAG(
             price_tuples.append([row.get(col) for col in price_cols])
 
         client.insert(
-            "market_dwh.fact_stock_daily",
+            "portfolios_tracker_dw.fact_stock_daily",
             price_tuples,
             column_names=price_cols,
         )
         print("Price insertion complete.")
-        client.command("OPTIMIZE TABLE market_dwh.fact_stock_daily FINAL")
 
     # --- TASK GROUP 2: RATIOS ---
     @task
     def extract_ratios():
         ratio_data = []
-        print("Fetching financial ratios...")
-        for ticker in STOCKS:
+        tickers = get_active_vn_tickers()
+        print(f"Fetching financial ratios for {len(tickers)} tickers...")
+        for ticker in tickers:
             df_ratio = fetch_financial_ratios(ticker)
             if not df_ratio.empty:
                 ratio_data.append(df_ratio)
@@ -194,21 +195,21 @@ with DAG(
             ratio_tuples.append([row.get(col, 0) for col in ratio_cols])
 
         client.insert(
-            "market_dwh.fact_financial_ratios",
+            "portfolios_tracker_dw.fact_financial_ratios",
             ratio_tuples,
             column_names=ratio_cols,
         )
         print("Financial ratio insertion complete.")
-        client.command("OPTIMIZE TABLE market_dwh.fact_financial_ratios FINAL")
 
     # --- TASK GROUP 3: FUNDAMENTALS (Dividends & Income Stmt) ---
     @task
     def extract_fundamentals():
         div_data = []
         income_data = []
+        tickers = get_active_vn_tickers()
 
-        print("Fetching fundamentals (Dividends & Income Statements)...")
-        for ticker in STOCKS:
+        print(f"Fetching fundamentals (Dividends & Income Statements) for {len(tickers)} tickers...")
+        for ticker in tickers:
             # Dividends
             df_div = fetch_dividends(ticker)
             if not df_div.empty:
@@ -277,12 +278,11 @@ with DAG(
                 div_tuples.append([row.get(col) for col in div_cols])
 
             client.insert(
-                "market_dwh.fact_dividends",
+                "portfolios_tracker_dw.fact_dividends",
                 div_tuples,
                 column_names=div_cols,
             )
             print("Dividend insertion complete.")
-            client.command("OPTIMIZE TABLE market_dwh.fact_dividends FINAL")
 
         # Load Income Statement
         income = data.get("income_stmt", [])
@@ -322,12 +322,11 @@ with DAG(
                 inc_tuples.append(vals)
 
             client.insert(
-                "market_dwh.fact_income_statement",
+                "portfolios_tracker_dw.fact_income_statement",
                 inc_tuples,
                 column_names=inc_cols,
             )
             print("Income statement insertion complete.")
-            client.command("OPTIMIZE TABLE market_dwh.fact_income_statement FINAL")
 
     # --- ORCHESTRATION WITH PARALLEL TASK GROUPS ---
 

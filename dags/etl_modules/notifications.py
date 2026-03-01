@@ -30,7 +30,7 @@ def get_latest_stock_data(tickers):
 
         for ticker in tickers:
             # Get latest market data with technical indicators
-            market_query = f"""
+            market_query = """
             SELECT 
                 ticker,
                 trading_date,
@@ -46,13 +46,13 @@ def get_latest_stock_data(tickers):
                 return_1m,
                 sector,
                 industry
-            FROM market_dwh.view_market_daily_master
-            WHERE ticker = '{ticker}'
+            FROM portfolios_tracker_dw.view_market_daily_master
+            WHERE ticker = {ticker:String}
             ORDER BY trading_date DESC
             LIMIT 1
             """
 
-            market_result = client.query(market_query)
+            market_result = client.query(market_query, parameters={"ticker": ticker})
 
             if market_result.result_rows:
                 row = market_result.result_rows[0]
@@ -73,7 +73,7 @@ def get_latest_stock_data(tickers):
                 }
 
                 # Get latest valuation data
-                valuation_query = f"""
+                valuation_query = """
                 SELECT 
                     daily_pe_ratio,
                     roe,
@@ -81,13 +81,13 @@ def get_latest_stock_data(tickers):
                     debt_to_equity,
                     net_profit_margin,
                     eps
-                FROM market_dwh.view_valuation_daily
-                WHERE ticker = '{ticker}'
+                FROM portfolios_tracker_dw.view_valuation_daily
+                WHERE ticker = {ticker:String}
                 ORDER BY trading_date DESC
                 LIMIT 1
                 """
 
-                val_result = client.query(valuation_query)
+                val_result = client.query(valuation_query, parameters={"ticker": ticker})
 
                 if val_result.result_rows:
                     val_row = val_result.result_rows[0]

@@ -74,7 +74,7 @@ def sync_assets(**context):
         logo_url,
         external_api_metadata,
         source
-    FROM market_dwh.dim_assets
+    FROM portfolios_tracker_dw.dim_assets
     WHERE is_active = 1
     ORDER BY asset_class, market, symbol
     """

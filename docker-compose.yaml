@@ -136,7 +136,7 @@ services:
       - "8123:8123" # HTTP
       - "9000:9000" # Native
     environment:
-      - CLICKHOUSE_DB=market_dwh
+      - CLICKHOUSE_DB=portfolios_tracker_dw
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ulimits:

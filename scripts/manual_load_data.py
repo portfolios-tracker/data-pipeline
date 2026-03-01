@@ -142,8 +142,8 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
         data = df.values.tolist()
 
         logging.info(f"Inserting {len(data)} price rows...")
-        client.insert("market_dwh.fact_stock_daily", data, column_names=price_cols)
-        client.command("OPTIMIZE TABLE market_dwh.fact_stock_daily FINAL")
+        client.insert("portfolios_tracker_dw.fact_stock_daily", data, column_names=price_cols)
+        client.command("OPTIMIZE TABLE portfolios_tracker_dw.fact_stock_daily FINAL")
 
     # 2. LOAD RATIOS
     if ratio_data:
@@ -208,8 +208,8 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
         data = df.values.tolist()
 
         logging.info(f"Inserting {len(data)} ratio rows...")
-        client.insert("market_dwh.fact_financial_ratios", data, column_names=ratio_cols)
-        client.command("OPTIMIZE TABLE market_dwh.fact_financial_ratios FINAL")
+        client.insert("portfolios_tracker_dw.fact_financial_ratios", data, column_names=ratio_cols)
+        client.command("OPTIMIZE TABLE portfolios_tracker_dw.fact_financial_ratios FINAL")
 
     # Load Dividends
     if fetch_divs:
@@ -236,10 +236,10 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
                 div_tuples.append([row.get(col) for col in div_cols])
 
             client.insert(
-                "market_dwh.fact_dividends", div_tuples, column_names=div_cols
+                "portfolios_tracker_dw.fact_dividends", div_tuples, column_names=div_cols
             )
             logging.info("Dividend insertion complete.")
-            client.command("OPTIMIZE TABLE market_dwh.fact_dividends FINAL")
+            client.command("OPTIMIZE TABLE portfolios_tracker_dw.fact_dividends FINAL")
         else:
             logging.warning("No dividend data fetched.")
 
@@ -283,10 +283,10 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
                 inc_tuples.append(vals)
 
             client.insert(
-                "market_dwh.fact_income_statement", inc_tuples, column_names=inc_cols
+                "portfolios_tracker_dw.fact_income_statement", inc_tuples, column_names=inc_cols
             )
             logging.info("Income statement insertion complete.")
-            client.command("OPTIMIZE TABLE market_dwh.fact_income_statement FINAL")
+            client.command("OPTIMIZE TABLE portfolios_tracker_dw.fact_income_statement FINAL")
         else:
             logging.warning("No income statement data fetched.")
 
@@ -318,9 +318,9 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
             for row in news_records:
                 news_tuples.append([row.get(col) for col in news_cols])
 
-            client.insert("market_dwh.fact_news", news_tuples, column_names=news_cols)
+            client.insert("portfolios_tracker_dw.fact_news", news_tuples, column_names=news_cols)
             logging.info("News insertion complete.")
-            client.command("OPTIMIZE TABLE market_dwh.fact_news FINAL")
+            client.command("OPTIMIZE TABLE portfolios_tracker_dw.fact_news FINAL")
         else:
             logging.warning("No news data fetched.")
 
@@ -402,10 +402,10 @@ def update_company_dimension(client):
         # It handles the missing 'ingested_at' by letting ClickHouse use the Default value.
         logging.info(f"Inserting {len(df_merged)} rows into dim_stock_companies...")
 
-        client.insert_df("market_dwh.dim_stock_companies", df_merged)
+        client.insert_df("portfolios_tracker_dw.dim_assets", df_merged)
 
         # Deduplicate immediately
-        client.command("OPTIMIZE TABLE market_dwh.dim_stock_companies FINAL")
+        client.command("OPTIMIZE TABLE portfolios_tracker_dw.dim_assets FINAL")
         logging.info("Company dimension updated successfully.")
 
     except Exception as e:

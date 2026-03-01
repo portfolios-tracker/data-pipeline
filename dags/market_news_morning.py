@@ -10,7 +10,7 @@ import sys
 # Add dags directory to path so we can import etl_modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from etl_modules.fetcher import fetch_news
+from etl_modules.fetcher import fetch_news, get_active_vn_tickers
 from etl_modules.notifications import (
     send_success_notification,
     send_failure_notification,
@@ -18,7 +18,6 @@ from etl_modules.notifications import (
 )
 
 # CONFIG
-STOCKS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
@@ -47,9 +46,10 @@ with DAG(
     @task
     def extract_news():
         news_data = []
-        print("Fetching daily news...")
+        tickers = get_active_vn_tickers()
+        print(f"Fetching daily news for {len(tickers)} tickers...")
 
-        for ticker in STOCKS:
+        for ticker in tickers:
             df = fetch_news(ticker)
             if not df.empty:
                 news_data.append(df)
@@ -100,9 +100,8 @@ with DAG(
                     pass
             tuples.append([row.get(c) for c in cols])
 
-        client.insert("market_dwh.fact_news", tuples, column_names=cols)
+        client.insert("portfolios_tracker_dw.fact_news", tuples, column_names=cols)
         print("News insertion complete.")
-        client.command("OPTIMIZE TABLE market_dwh.fact_news FINAL")
 
     @task
     def send_news_digest(data):
