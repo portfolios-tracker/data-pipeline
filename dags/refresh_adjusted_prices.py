@@ -12,19 +12,20 @@ Tickers source: portfolios_tracker_dw.dim_assets WHERE asset_class='STOCK' AND m
 Schedule: nightly at 18:30 Vietnam time (30 min after market_data_evening_batch at 18:00)
 """
 
-from airflow import DAG
-from airflow.sdk import task
-from datetime import datetime, timedelta, date
-from pendulum import timezone
-import clickhouse_connect
-import pandas as pd
 import os
 import sys
+from datetime import date, datetime, timedelta
+
+import clickhouse_connect
+import pandas as pd
+from airflow import DAG
+from airflow.sdk import task
+from pendulum import timezone
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from etl_modules.price_adjuster import calculate_adjusted_prices
 from etl_modules.fetcher import fetch_index_history
+from etl_modules.price_adjuster import calculate_adjusted_prices
 
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
@@ -93,17 +94,31 @@ with DAG(
         """
         client = _get_client()
         end_date = date.today().isoformat()
-        start_date = date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+        start_date = (
+            date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+        )
 
         df = fetch_index_history(VNINDEX_SYMBOL, start_date, end_date)
         if df.empty:
-            print(f"WARNING: No VNINDEX data fetched — skipping upsert")
+            print("WARNING: No VNINDEX data fetched — skipping upsert")
             return
 
         cols = [
-            "ticker", "trading_date", "open", "high", "low", "close", "volume",
-            "ma_50", "ma_200", "rsi_14", "daily_return",
-            "macd", "macd_signal", "macd_hist", "source",
+            "ticker",
+            "trading_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "ma_50",
+            "ma_200",
+            "rsi_14",
+            "daily_return",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "source",
         ]
         df = df[[c for c in cols if c in df.columns]]
         client.insert_df("portfolios_tracker_dw.fact_stock_daily", df)
@@ -118,7 +133,9 @@ with DAG(
         """
         client = _get_client()
         end_date = date.today().isoformat()
-        start_date = date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+        start_date = (
+            date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+        )
 
         all_tickers = sorted(set(tickers + [VNINDEX_SYMBOL]))
         all_rows: list[dict] = []
@@ -133,19 +150,29 @@ with DAG(
                   AND trading_date BETWEEN {start_date:String} AND {end_date:String}
                 ORDER BY trading_date
                 """,
-                parameters={"ticker": ticker, "start_date": start_date, "end_date": end_date},
+                parameters={
+                    "ticker": ticker,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
             )
             if not price_result.result_rows:
                 print(f"No price data for {ticker} — skipping adjustment")
                 continue
 
-            raw_prices = pd.DataFrame(price_result.result_rows, columns=["trading_date", "close"])
+            raw_prices = pd.DataFrame(
+                price_result.result_rows, columns=["trading_date", "close"]
+            )
 
             # --- Dividends ---
             if ticker == VNINDEX_SYMBOL:
                 # Indices have no dividends; adjusted == raw
                 dividends = pd.DataFrame(
-                    columns=["exercise_date", "cash_dividend_percentage", "stock_dividend_percentage"]
+                    columns=[
+                        "exercise_date",
+                        "cash_dividend_percentage",
+                        "stock_dividend_percentage",
+                    ]
                 )
             else:
                 div_result = client.query(
@@ -159,14 +186,20 @@ with DAG(
                 )
                 dividends = pd.DataFrame(
                     div_result.result_rows,
-                    columns=["exercise_date", "cash_dividend_percentage", "stock_dividend_percentage"],
+                    columns=[
+                        "exercise_date",
+                        "cash_dividend_percentage",
+                        "stock_dividend_percentage",
+                    ],
                 )
 
             adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
             if not adjusted_df.empty:
                 all_rows.extend(adjusted_df.to_dict(orient="records"))
 
-        print(f"Calculated adjusted prices for {len(all_tickers)} tickers → {len(all_rows)} rows")
+        print(
+            f"Calculated adjusted prices for {len(all_tickers)} tickers → {len(all_rows)} rows"
+        )
         return all_rows
 
     @task
@@ -185,7 +218,9 @@ with DAG(
         # Ensure column types match ClickHouse schema
         df["adj_factor"] = df["adj_factor"].astype(float)
         df["adjusted_close"] = df["adjusted_close"].astype(float)
-        df["raw_close"] = df["raw_close"].astype(float)  # ClickHouse driver handles Decimal64
+        df["raw_close"] = df["raw_close"].astype(
+            float
+        )  # ClickHouse driver handles Decimal64
 
         client.insert_df("portfolios_tracker_dw.adjusted_ohlcv", df)
         print(f"Upserted {len(df)} rows into portfolios_tracker_dw.adjusted_ohlcv")
