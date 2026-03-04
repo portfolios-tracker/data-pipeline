@@ -304,6 +304,14 @@ def backfill_dim_assets_description(**context):
             logger.warning(f"Failed to backfill description for {symbol}: {e}")
 
     logger.info(f"Backfilled description for {backfill_count} tickers in dim_assets")
+
+    if backfill_count > 0:
+        try:
+            ch_client.command("OPTIMIZE TABLE portfolios_tracker_dw.dim_assets FINAL")
+            logger.info("OPTIMIZE TABLE dim_assets FINAL completed")
+        except Exception as e:
+            logger.warning(f"OPTIMIZE TABLE failed (non-fatal): {e}")
+
     return backfill_count
 
 
