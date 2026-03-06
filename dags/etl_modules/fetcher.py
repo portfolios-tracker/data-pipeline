@@ -15,12 +15,19 @@ from .cache import cached_data
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
-def get_active_vn_tickers() -> list[str]:
+def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
     """
     Return active VN stock tickers from ClickHouse dim_assets.
 
     Falls back to a hardcoded seed list when ClickHouse is not reachable
     (e.g. during DAG file parsing on Airflow startup).
+
+    Parameters
+    ----------
+    raise_on_fallback : bool
+        When True, raise a RuntimeError instead of returning the fallback list.
+        Set this to True in task execution contexts to prevent silent partial
+        ingestion when ClickHouse is unexpectedly unreachable at runtime.
     """
     try:
         client = clickhouse_connect.get_client(
@@ -40,7 +47,16 @@ def get_active_vn_tickers() -> list[str]:
             logging.info(f"Loaded {len(tickers)} active VN tickers from dim_assets")
             return tickers
     except Exception as e:
-        logging.warning(f"Could not query dim_assets, using fallback list: {e}")
+        if raise_on_fallback:
+            raise RuntimeError(
+                f"Could not load active VN tickers from ClickHouse dim_assets: {e}. "
+                "Task will fail so Airflow can retry. "
+                "If this is persistent, check ClickHouse connectivity and the dim_assets table."
+            ) from e
+        logging.error(
+            f"Could not query dim_assets, falling back to seed list of "
+            f"{len(_FALLBACK_VN_TICKERS)} tickers (partial ingestion risk): {e}"
+        )
 
     return list(_FALLBACK_VN_TICKERS)
 

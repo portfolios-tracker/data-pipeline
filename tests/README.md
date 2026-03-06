@@ -72,9 +72,9 @@ Test individual functions in isolation with mocked external dependencies.
 - `clean_decimal_cols()` - Data cleaning for Decimal types
 - `fetch_stock_price()` - Stock price fetching with indicators
 - `fetch_financial_ratios()` - Financial ratios extraction
-- `fetch_income_stmt()` - Income statement data (TODO)
-- `fetch_dividends()` - Dividend history (TODO)
-- `fetch_news()` - News article fetching (TODO)
+- `fetch_income_stmt()` - Income statement data
+- `fetch_dividends()` - Dividend history
+- `fetch_news()` - News article fetching
 
 **test_notifications.py:**
 
@@ -159,27 +159,25 @@ See [conftest.py](conftest.py) for all available fixtures:
 ## Coverage Goals
 
 - **Target:** 50% code coverage minimum
-- **Current Status:** Phase 1 implemented (foundation + core functions)
+- **Current Status:** Phase 1 + Phase 2 implemented (foundation + all core fetch functions)
 - **Priority Areas:**
   - ✅ `clean_decimal_cols()` - 100% coverage
-  - ✅ Notification callbacks - 100% coverage
-  - ⚠️ `fetch_stock_price()` - Partial coverage (core scenarios)
-  - ⚠️ `fetch_financial_ratios()` - Partial coverage
-  - ❌ Other fetch functions - Placeholder tests only
+  - ✅ Notification callbacks - ~94% coverage
+  - ✅ `fetch_stock_price()` - Core scenarios covered
+  - ✅ `fetch_financial_ratios()` - Core scenarios covered
+  - ✅ `fetch_income_stmt()` - Success, missing columns, empty DataFrame
+  - ✅ `fetch_dividends()` - Success, missing fields, empty DataFrame
+  - ✅ `fetch_news()` - Success, missing fields, empty DataFrame
 
 ## CI/CD Integration
 
-**Status:** TODO - Add GitHub Actions workflow
+GitHub Actions workflow at `.github/workflows/test.yml` runs on every PR:
 
-Planned workflow:
-
-```yaml
-# .github/workflows/test.yml
-- Run pytest on every PR
-- Generate coverage report
-- Block merge if coverage < 50%
-- Upload coverage to Codecov
-```
+- Validates DAG registry against README (`scripts/validate_dag_registry.py`)
+- Runs pytest with coverage report
+- Blocks merge if coverage < 50%
+- Uploads coverage report as artifact
+- Comments PR with coverage summary
 
 ## Troubleshooting
 
@@ -228,13 +226,13 @@ def test_api_call():
 
 ## Next Steps (Roadmap)
 
-### Phase 2: Expand Unit Tests
+### Phase 2: Expand Unit Tests ✅ Complete
 
-- Complete `fetch_income_stmt()` tests
-- Complete `fetch_dividends()` tests
-- Complete `fetch_news()` tests
-- Add error handling scenarios
-- Test data transformation edge cases
+- ✅ Complete `fetch_income_stmt()` tests
+- ✅ Complete `fetch_dividends()` tests
+- ✅ Complete `fetch_news()` tests
+- ✅ Error handling scenarios covered
+- ✅ Data transformation edge cases covered
 
 ### Phase 3: Integration Tests
 

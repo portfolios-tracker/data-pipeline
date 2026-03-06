@@ -1,9 +1,32 @@
+"""
+scripts/manual_load_data.py
+
+⚠️  LOCAL / DEVELOPMENT USE ONLY
+================================
+This script performs direct ClickHouse writes for a hardcoded set of tickers.
+It is intended for:
+  - Backfilling historical data after a missed scheduled Airflow run.
+  - Local development and ETL debugging.
+  - Initial data seeding in a fresh dev environment.
+
+DO NOT run against a production ClickHouse cluster without explicit approval.
+Running concurrently with a live Airflow worker on the same date range can
+introduce duplicate rows (even though FINAL deduplication is applied afterwards).
+
+Safe usage boundaries:
+  1. Point CLICKHOUSE_HOST at a dev/staging instance, not prod.
+  2. Avoid running while a production Airflow job is in flight for the same tickers.
+  3. The STOCKS list is hardcoded for safety — expand it locally, never commit those changes.
+  4. Review the README (## 🔧 Developer Scripts) for full guidance before use.
+"""
+
 import argparse
-import pandas as pd
-import clickhouse_connect
+import logging
 import os
 import sys
-import logging
+
+import clickhouse_connect
+import pandas as pd
 
 # Add project root to path to import dags.etl_modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
