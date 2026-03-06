@@ -31,15 +31,15 @@ graph LR
 
 ## 🚀 Key Workflows (DAGs)
 
-| DAG Name                      | Schedule           | Description                                                            |
-| :---------------------------- | :----------------- | :--------------------------------------------------------------------- |
-| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Syncs asset master data (VN/US Stocks, Crypto) to ClickHouse.          |
-| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Fetches end-of-day prices, ratios, and fundamentals.                   |
-| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Rebuilds backward-adjusted OHLCV series for total-return backtests.    |
-| `market_news_morning`         | Mon-Fri (7 AM ICT) | Aggregates daily news and sends summaries to Telegram.                 |
-| `portfolio_schedule_snapshot` | Hourly (24/7)      | Triggers portfolio performance snapshots via NestJS API.               |
-| `sync_assets_to_postgres`     | Daily (3 AM)       | Syncs ClickHouse asset dimensions back to Supabase Postgres.           |
-| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Ingests VN company profiles and upserts Gemini embeddings to pgvector. |
+| DAG Name                      | Schedule           | Description                                                                    |
+| :---------------------------- | :----------------- | :----------------------------------------------------------------------------- |
+| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) to ClickHouse. |
+| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Fetches end-of-day prices, ratios, and fundamentals.                           |
+| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Rebuilds backward-adjusted OHLCV series for total-return backtests.            |
+| `market_news_morning`         | Mon-Fri (7 AM ICT) | Aggregates daily news and sends summaries to Telegram.                         |
+| `portfolio_schedule_snapshot` | Hourly (24/7)      | Triggers portfolio performance snapshots via NestJS API.                       |
+| `sync_assets_to_postgres`     | Daily (3 AM)       | Syncs ClickHouse asset dimensions back to Supabase Postgres.                   |
+| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Ingests VN company profiles and upserts Gemini embeddings to pgvector.         |
 
 ## 🛠️ Local Development
 

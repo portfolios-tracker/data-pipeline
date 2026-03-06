@@ -4,10 +4,10 @@ This task list tracks epic-alignment actions for `services/data-pipeline`.
 
 ## Priority 1 - Missing For Current Epics
 
-- [ ] Implement Epic 9.1 precious metals ingestion (XAU/XAG) in `dags/assets_dimension_etl.py`.
-- [ ] Define source mapping for metals symbols (for example `GC=F`, `SI=F`) and map to `asset_class=COMMODITY`.
-- [ ] Ensure metals records are synced by `dags/sync_assets_to_postgres.py` and visible to API/web asset search.
-- [ ] Add tests for metals ingestion and sync behavior in `tests/unit` and `tests/integration`.
+- [x] Implement Epic 9.1 precious metals ingestion (XAU/XAG) in `dags/assets_dimension_etl.py`.
+- [x] Define source mapping for metals symbols (for example `GC=F`, `SI=F`) and map to `asset_class=COMMODITY`.
+- [x] Ensure metals records are synced by `dags/sync_assets_to_postgres.py` and visible to API/web asset search.
+- [x] Add tests for metals ingestion and sync behavior in `tests/unit` and `tests/integration`.
 
 ## Priority 2 - Documentation And Alignment
 

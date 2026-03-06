@@ -7,6 +7,7 @@ Fetches:
 - VN stocks (vnstock) → asset_class=STOCK, market=VN
 - US stocks (Wikipedia S&P 500 + yfinance) → asset_class=STOCK, market=US
 - Crypto (CoinGecko) → asset_class=CRYPTO, market=NULL
+- Precious metals (yfinance futures mapping) → asset_class=COMMODITY, market=NULL
 
 Schedule: Weekly (Sunday 2 AM)
 """
@@ -305,6 +306,87 @@ def fetch_crypto(**context):
     return len(df)
 
 
+def fetch_precious_metals(**context):
+    """
+    Seed precious metals dimensions for AI Risk Intelligence.
+
+    Mapping:
+    - XAU -> yfinance source symbol GC=F (Gold futures)
+    - XAG -> yfinance source symbol SI=F (Silver futures)
+
+    Stored as asset_class='COMMODITY' so downstream systems can classify
+    metals independently from stocks/crypto.
+    """
+    import yfinance as yf
+
+    client = get_clickhouse_client()
+
+    metals_mapping = [
+        {
+            "symbol": "XAU",
+            "name_en": "Gold (XAU/USD)",
+            "name_local": "Gold",
+            "source_symbol": "GC=F",
+            "display_exchange": "COMEX",
+        },
+        {
+            "symbol": "XAG",
+            "name_en": "Silver (XAG/USD)",
+            "name_local": "Silver",
+            "source_symbol": "SI=F",
+            "display_exchange": "COMEX",
+        },
+    ]
+
+    records = []
+    for metal in metals_mapping:
+        exchange = metal["display_exchange"]
+        provider_name = metal["name_en"]
+
+        # Best-effort metadata enrichment from yfinance.
+        try:
+            info = yf.Ticker(metal["source_symbol"]).info or {}
+            provider_name = str(info.get("longName") or provider_name)
+            exchange = str(info.get("exchange") or exchange)
+        except Exception as e:
+            logger.warning(
+                f"Could not enrich {metal['symbol']} from yfinance {metal['source_symbol']}: {e}"
+            )
+
+        records.append(
+            {
+                "symbol": metal["symbol"],
+                # Keep explicit XAU/XAG in names so symbol and keyword search both work.
+                "name_en": metal["name_en"],
+                "name_local": metal["name_local"],
+                "asset_class": "COMMODITY",
+                "market": "",
+                "currency": "USD",
+                "exchange": exchange,
+                "sector": "Precious Metals",
+                "industry": "Commodity",
+                "logo_url": "",
+                "description": provider_name,
+                "external_api_metadata": {
+                    "source_api": "yfinance",
+                    "source_symbol": metal["source_symbol"],
+                    "provider_symbol": metal["source_symbol"],
+                    "commodity_type": "precious_metal",
+                    "unit": "troy_ounce",
+                    "quote_pair": f"{metal['symbol']}/USD",
+                },
+                "source": "yfinance",
+                "is_active": 1,
+            }
+        )
+
+    df = pd.DataFrame(records)
+    client.insert_df("portfolios_tracker_dw.dim_assets", df)
+
+    logger.info(f"Inserted {len(df)} precious metals (asset_class=COMMODITY)")
+    return len(df)
+
+
 # Define tasks
 task_vn = PythonOperator(
     task_id="fetch_vn_stocks",
@@ -324,5 +406,11 @@ task_crypto = PythonOperator(
     dag=dag,
 )
 
+task_precious_metals = PythonOperator(
+    task_id="fetch_precious_metals",
+    python_callable=fetch_precious_metals,
+    dag=dag,
+)
+
 # All tasks run in parallel
-[task_vn, task_us, task_crypto]
+[task_vn, task_us, task_crypto, task_precious_metals]
