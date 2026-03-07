@@ -106,21 +106,23 @@ Manually triggers the full ETL cycle (prices, ratios, dividends, income statemen
 
 ```bash
 # Backfill a date range
-uv run python scripts/manual_load_data.py --start 2024-01-01 --end 2024-01-31
+uv run python scripts/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31
 
 # Prices only
-uv run python scripts/manual_load_data.py --start 2024-01-01 --end 2024-01-31 --price-only
+uv run python scripts/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31 --price-only
 
 # Refresh company dimension from vnstock
-uv run python scripts/manual_load_data.py --update-companies
+uv run python scripts/manual_load_data.py --yes-really-run --update-companies
 ```
 
 **Safe usage boundaries:**
 
 1. Run from a local machine pointing to a **non-production** ClickHouse instance or a dev replica.
-2. Always run `OPTIMIZE TABLE … FINAL` afterwards (the script does this automatically) to deduplicate.
-3. Do not run concurrently with a live Airflow worker processing the same tickers/date range.
-4. The ticker list is hardcoded to `STOCKS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]`; edit the file locally to expand it — do not commit those changes.
+2. Always pass `--yes-really-run` (script aborts without it).
+3. The script will hard-abort if `CLICKHOUSE_HOST` contains `prod`, `production`, `prd`, or `live`.
+4. Always run `OPTIMIZE TABLE … FINAL` afterwards (the script does this automatically) to deduplicate.
+5. Do not run concurrently with a live Airflow worker processing the same tickers/date range.
+6. The ticker list is hardcoded to `STOCKS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]`; edit the file locally to expand it — do not commit those changes.
 
 ### `scripts/init_clickhouse_schema.py`
 

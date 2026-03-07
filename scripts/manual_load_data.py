@@ -18,15 +18,23 @@ Safe usage boundaries:
   2. Avoid running while a production Airflow job is in flight for the same tickers.
   3. The STOCKS list is hardcoded for safety — expand it locally, never commit those changes.
   4. Review the README (## 🔧 Developer Scripts) for full guidance before use.
+  5. Always pass --yes-really-run; the script will abort without it.
+  6. The script will abort if CLICKHOUSE_HOST contains 'prod', 'production', 'prd', or 'live'.
 """
 
 import argparse
 import logging
 import os
+import re
 import sys
 
 import clickhouse_connect
 import pandas as pd
+
+# Regex that matches a production-tier host segment as a whole token.
+# Word boundaries prevent false positives like 'dev-productivity-cluster'.
+# Matches: prod, production, prd, live as complete hostname segments.
+_PROD_HOST_RE = re.compile(r"\b(prod|production|prd|live)\b", re.IGNORECASE)
 
 # Add project root to path to import dags.etl_modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -438,6 +446,15 @@ def update_company_dimension(client):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manual Stock Data Loader")
 
+    parser.add_argument(
+        "--yes-really-run",
+        action="store_true",
+        help=(
+            "Required safety flag — confirms you intend to write data directly "
+            "to ClickHouse. Omitting this flag aborts the script."
+        ),
+    )
+
     # Mutually exclusive group for mode
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -456,6 +473,28 @@ if __name__ == "__main__":
     parser.add_argument("--end", required=False, help="End date (YYYY-MM-DD)")
 
     args = parser.parse_args()
+
+    # -------------------------------------------------------------------------
+    # Safety check 1 – explicit confirmation flag
+    # -------------------------------------------------------------------------
+    if not args.yes_really_run:
+        logging.error(
+            "Aborted: --yes-really-run flag not provided.\n"
+            "This script performs direct ClickHouse writes. "
+            "Re-run with --yes-really-run to confirm your intent."
+        )
+        sys.exit(1)
+
+    # -------------------------------------------------------------------------
+    # Safety check 2 – block known production host patterns
+    # -------------------------------------------------------------------------
+    if _PROD_HOST_RE.search(CLICKHOUSE_HOST):
+        logging.error(
+            f"Aborted: CLICKHOUSE_HOST='{CLICKHOUSE_HOST}' looks like a production "
+            "endpoint. This script must only be used against dev/staging clusters. "
+            "Unset or override CLICKHOUSE_HOST to proceed."
+        )
+        sys.exit(1)
 
     if args.update_companies:
         # Create client just for this operation if running from CLI

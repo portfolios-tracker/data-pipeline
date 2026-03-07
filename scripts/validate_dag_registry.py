@@ -26,8 +26,11 @@ def extract_dag_ids_from_file(path: str) -> list[str]:
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         tree = ast.parse(source, filename=path)
-    except SyntaxError:
-        return dag_ids
+    except SyntaxError as exc:
+        # Let the exception propagate naturally — ast.parse() includes the
+        # filename and line number in the SyntaxError message, giving CI a
+        # clear and non-duplicated error message.
+        raise SyntaxError(f"Failed to parse DAG file {path}: {exc}") from exc
 
     for node in ast.walk(tree):
         # Match:  dag_id="some_dag"  (keyword argument)

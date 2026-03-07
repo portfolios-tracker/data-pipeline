@@ -46,6 +46,19 @@ def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
         if tickers:
             logging.info(f"Loaded {len(tickers)} active VN tickers from dim_assets")
             return tickers
+        # Treat an empty result set as a fallback condition as well
+        if raise_on_fallback:
+            raise RuntimeError(
+                "ClickHouse dim_assets query returned zero active VN tickers "
+                "for market=VN and asset_class=STOCK (is_active=1). "
+                "Task will fail so Airflow can retry. "
+                "If this is persistent, check dim_assets contents and filters."
+            )
+        logging.warning(
+            "ClickHouse dim_assets query returned zero active VN tickers, "
+            f"falling back to seed list of {len(_FALLBACK_VN_TICKERS)} tickers "
+            "(partial ingestion risk)."
+        )
     except Exception as e:
         if raise_on_fallback:
             raise RuntimeError(
