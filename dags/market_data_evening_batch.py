@@ -52,7 +52,7 @@ with DAG(
     @task
     def extract_prices():
         price_data = []
-        tickers = get_active_vn_tickers()
+        tickers = get_active_vn_tickers(raise_on_fallback=True)
         print(f"RUNNING DAILY INCREMENTAL (7 DAYS) for {len(tickers)} tickers")
         # Fetch 250 days for indicator calculation, but only keep last 7 days
         lookback_date = (datetime.today() - timedelta(days=250)).strftime("%Y-%m-%d")
@@ -131,7 +131,7 @@ with DAG(
     @task
     def extract_ratios():
         ratio_data = []
-        tickers = get_active_vn_tickers()
+        tickers = get_active_vn_tickers(raise_on_fallback=True)
         print(f"Fetching financial ratios for {len(tickers)} tickers...")
         for ticker in tickers:
             df_ratio = fetch_financial_ratios(ticker)
@@ -206,7 +206,7 @@ with DAG(
     def extract_fundamentals():
         div_data = []
         income_data = []
-        tickers = get_active_vn_tickers()
+        tickers = get_active_vn_tickers(raise_on_fallback=True)
 
         print(f"Fetching fundamentals (Dividends & Income Statements) for {len(tickers)} tickers...")
         for ticker in tickers:

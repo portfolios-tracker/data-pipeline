@@ -46,7 +46,7 @@ with DAG(
     @task
     def extract_news():
         news_data = []
-        tickers = get_active_vn_tickers()
+        tickers = get_active_vn_tickers(raise_on_fallback=True)
         print(f"Fetching daily news for {len(tickers)} tickers...")
 
         for ticker in tickers:
