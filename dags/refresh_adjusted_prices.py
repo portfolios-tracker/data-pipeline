@@ -6,9 +6,9 @@ Airflow DAG: refresh_adjusted_prices
 Story 2.1 — Adjusted Market Data Pipeline
 
 Task flow:
-  fetch_tickers  →  ingest_vnindex  →  calculate_adjusted  →  upsert_adjusted_ohlcv
+  fetch_tickers  →  ingest_vnindex  →  calculate_adjusted  →  upsert_adjusted_prices
 
-Tickers source: portfolios_tracker_dw.dim_assets WHERE asset_class='STOCK' AND market='VN' AND is_active=1
+Tickers source: Supabase public.assets WHERE asset_class='STOCK' AND market='VN'
 Schedule: nightly at 18:30 Vietnam time (30 min after market_data_evening_batch at 18:00)
 """
 
@@ -16,21 +16,20 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 
-import clickhouse_connect
 import pandas as pd
+import psycopg2
+import psycopg2.extras
 from airflow import DAG
 from airflow.sdk import task
 from pendulum import timezone
+from supabase import create_client
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from etl_modules.fetcher import fetch_index_history
 from etl_modules.price_adjuster import calculate_adjusted_prices
 
-CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
-CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 local_tz = timezone("Asia/Bangkok")
 
@@ -40,15 +39,12 @@ HISTORY_YEARS = 6
 VNINDEX_SYMBOL = "VNINDEX"
 
 
-def _get_client():
-    """Instantiate a ClickHouse client. Always called inside a task to avoid
-    module-level connection objects (consistent with market_data_evening_batch pattern)."""
-    return clickhouse_connect.get_client(
-        host=CLICKHOUSE_HOST,
-        port=CLICKHOUSE_PORT,
-        username=CLICKHOUSE_USER,
-        password=CLICKHOUSE_PASSWORD,
-    )
+def _get_conn():
+    """Open a psycopg2 connection. Always called inside a task to avoid
+    module-level connection objects (consistent with data-pipeline pattern)."""
+    if not SUPABASE_DB_URL:
+        raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
+    return psycopg2.connect(SUPABASE_DB_URL)
 
 
 with DAG(
@@ -61,74 +57,114 @@ with DAG(
     schedule="30 18 * * 1-5",  # 30 min after market_data_evening_batch
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
-    tags=["adjusted-prices", "clickhouse", "backtest"],
+    tags=["adjusted-prices", "supabase", "backtest"],
 ) as dag:
 
     @task
     def fetch_tickers_with_dividends():
         """
-        Pull the full list of active VN stocks from dim_assets.
+        Pull the full list of active VN stocks from Supabase assets table.
         Returns a list of ticker symbol strings.
         """
-        client = _get_client()
-        result = client.query(
-            """
-            SELECT symbol
-            FROM portfolios_tracker_dw.dim_assets FINAL
-            WHERE asset_class = 'STOCK'
-              AND market = 'VN'
-              AND is_active = 1
-            ORDER BY symbol
-            """
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise RuntimeError(
+                "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY not set"
+            )
+        client = create_client(url, key)
+        response = (
+            client.table("assets")
+            .select("symbol")
+            .eq("asset_class", "STOCK")
+            .eq("market", "VN")
+            .order("symbol")
+            .execute()
         )
-        tickers = [row[0] for row in result.result_rows]
-        print(f"Found {len(tickers)} active VN tickers in dim_assets")
+        tickers = [row["symbol"] for row in response.data if row.get("symbol")]
+        print(f"Found {len(tickers)} active VN tickers in assets table")
         return tickers
 
     @task
     def ingest_vnindex():
         """
-        Fetch VNINDEX history and upsert into fact_stock_daily so that
+        Fetch VNINDEX history and upsert into market_data_prices so that
         refresh_adjusted_prices can also store an adjusted entry for it
         (treated as a zero-dividend index: adj_factor = 1.0).
         """
-        client = _get_client()
-        end_date = date.today().isoformat()
-        start_date = (
-            date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
-        )
+        conn = _get_conn()
+        try:
+            end_date = date.today().isoformat()
+            start_date = (
+                date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+            )
 
-        df = fetch_index_history(VNINDEX_SYMBOL, start_date, end_date)
-        if df.empty:
-            print("WARNING: No VNINDEX data fetched — skipping upsert")
-            return
+            df = fetch_index_history(VNINDEX_SYMBOL, start_date, end_date)
+            if df.empty:
+                print("WARNING: No VNINDEX data fetched — skipping upsert")
+                return
 
-        cols = [
-            "ticker",
-            "trading_date",
-            "close",
-            "volume",
-            "ma_50",
-            "ma_200",
-            "rsi_14",
-            "daily_return",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-            "source",
-        ]
-        df = df[[c for c in cols if c in df.columns]]
-        client.insert_df("portfolios_tracker_dw.fact_stock_daily", df)
-        print(f"Upserted {len(df)} VNINDEX rows into fact_stock_daily")
+            cols = [
+                "ticker",
+                "trading_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "ma_50",
+                "ma_200",
+                "rsi_14",
+                "daily_return",
+                "macd",
+                "macd_signal",
+                "macd_hist",
+                "source",
+            ]
+            df = df[[c for c in cols if c in df.columns]]
+            df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
+
+            rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
+            present_cols = [c for c in cols if c in df.columns]
+
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        f"""
+                        INSERT INTO public.market_data_prices
+                            ({", ".join(present_cols)})
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            open        = EXCLUDED.open,
+                            high        = EXCLUDED.high,
+                            low         = EXCLUDED.low,
+                            close       = EXCLUDED.close,
+                            volume      = EXCLUDED.volume,
+                            ma_50       = EXCLUDED.ma_50,
+                            ma_200      = EXCLUDED.ma_200,
+                            rsi_14      = EXCLUDED.rsi_14,
+                            daily_return = EXCLUDED.daily_return,
+                            macd        = EXCLUDED.macd,
+                            macd_signal = EXCLUDED.macd_signal,
+                            macd_hist   = EXCLUDED.macd_hist,
+                            source      = EXCLUDED.source,
+                            ingested_at = NOW()
+                        """,
+                        rows,
+                    )
+            print(f"Upserted {len(df)} VNINDEX rows into market_data_prices")
+        finally:
+            conn.close()
 
     @task
     def calculate_adjusted(tickers: list[str]):
         """
         For each ticker (plus VNINDEX), fetch raw prices and dividend history
-        from ClickHouse, compute backward-adjusted prices, and return as a
-        serialisable list of dicts for the upsert task.
+        from Supabase/Postgres, compute backward-adjusted prices, and return as
+        a serialisable list of dicts for the upsert task.
         """
-        client = _get_client()
+        conn = _get_conn()
         end_date = date.today().isoformat()
         start_date = (
             date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
@@ -137,62 +173,63 @@ with DAG(
         all_tickers = sorted(set(tickers + [VNINDEX_SYMBOL]))
         all_rows: list[dict] = []
 
-        for ticker in all_tickers:
-            # --- Raw prices ---
-            price_result = client.query(
-                """
-                                SELECT trading_date, close, volume
-                FROM portfolios_tracker_dw.fact_stock_daily FINAL
-                WHERE ticker = {ticker:String}
-                  AND trading_date BETWEEN {start_date:String} AND {end_date:String}
-                ORDER BY trading_date
-                """,
-                parameters={
-                    "ticker": ticker,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                },
-            )
-            if not price_result.result_rows:
-                print(f"No price data for {ticker} — skipping adjustment")
-                continue
+        try:
+            with conn.cursor() as cur:
+                for ticker in all_tickers:
+                    # --- Raw prices ---
+                    cur.execute(
+                        """
+                        SELECT trading_date::text, close::text, volume::text
+                        FROM public.market_data_prices
+                        WHERE ticker = %s
+                          AND trading_date BETWEEN %s::date AND %s::date
+                        ORDER BY trading_date
+                        """,
+                        (ticker, start_date, end_date),
+                    )
+                    price_rows = cur.fetchall()
+                    if not price_rows:
+                        print(f"No price data for {ticker} — skipping adjustment")
+                        continue
 
-            raw_prices = pd.DataFrame(
-                price_result.result_rows, columns=["trading_date", "close", "volume"]
-            )
+                    raw_prices = pd.DataFrame(price_rows, columns=["trading_date", "close", "volume"])
 
-            # --- Dividends ---
-            if ticker == VNINDEX_SYMBOL:
-                # Indices have no dividends; adjusted == raw
-                dividends = pd.DataFrame(
-                    columns=[
-                        "exercise_date",
-                        "cash_dividend_percentage",
-                        "stock_dividend_percentage",
-                    ]
-                )
-            else:
-                div_result = client.query(
-                    """
-                    SELECT exercise_date, cash_dividend_percentage, stock_dividend_percentage
-                    FROM portfolios_tracker_dw.fact_dividends FINAL
-                    WHERE ticker = {ticker:String}
-                    ORDER BY exercise_date
-                    """,
-                    parameters={"ticker": ticker},
-                )
-                dividends = pd.DataFrame(
-                    div_result.result_rows,
-                    columns=[
-                        "exercise_date",
-                        "cash_dividend_percentage",
-                        "stock_dividend_percentage",
-                    ],
-                )
+                    # --- Dividends ---
+                    if ticker == VNINDEX_SYMBOL:
+                        dividends = pd.DataFrame(
+                            columns=[
+                                "exercise_date",
+                                "cash_dividend_percentage",
+                                "stock_dividend_percentage",
+                            ]
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT exercise_date::text,
+                                   cash_dividend_percentage::text,
+                                   stock_dividend_percentage::text
+                            FROM public.market_data_dividends
+                            WHERE ticker = %s
+                            ORDER BY exercise_date
+                            """,
+                            (ticker,),
+                        )
+                        div_rows = cur.fetchall()
+                        dividends = pd.DataFrame(
+                            div_rows,
+                            columns=[
+                                "exercise_date",
+                                "cash_dividend_percentage",
+                                "stock_dividend_percentage",
+                            ],
+                        )
 
-            adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
-            if not adjusted_df.empty:
-                all_rows.extend(adjusted_df.to_dict(orient="records"))
+                    adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
+                    if not adjusted_df.empty:
+                        all_rows.extend(adjusted_df.to_dict(orient="records"))
+        finally:
+            conn.close()
 
         print(
             f"Calculated adjusted prices for {len(all_tickers)} tickers → {len(all_rows)} rows"
@@ -200,33 +237,56 @@ with DAG(
         return all_rows
 
     @task
-    def upsert_adjusted_ohlcv(rows: list[dict]):
+    def upsert_adjusted_prices(rows: list[dict]):
         """
-        Bulk-insert the calculated adjusted prices into portfolios_tracker_dw.adjusted_ohlcv.
-        Uses ReplacingMergeTree idempotent semantics (ingested_at as version).
+        Bulk-upsert the calculated adjusted prices into public.adjusted_price_daily.
+        Uses ON CONFLICT DO UPDATE for idempotent writes.
         """
         if not rows:
             print("No rows to upsert — nothing to do")
             return
 
-        client = _get_client()
+        conn = _get_conn()
         df = pd.DataFrame(rows)
 
-        # Ensure column types match ClickHouse schema
+        # Ensure column types are JSON-serialisable for Airflow XCom (already done),
+        # and cast to float for Postgres Numeric columns.
         df["adj_factor"] = df["adj_factor"].astype(float)
         df["adjusted_close"] = df["adjusted_close"].astype(float)
         df["adjusted_volume"] = df["adjusted_volume"].astype(float)
-        df["raw_close"] = df["raw_close"].astype(
-            float
-        )  # ClickHouse driver handles Decimal64
+        df["raw_close"] = df["raw_close"].astype(float)
 
-        client.insert_df("portfolios_tracker_dw.adjusted_ohlcv", df)
-        print(f"Upserted {len(df)} rows into portfolios_tracker_dw.adjusted_ohlcv")
+        insert_rows = list(
+            df[["ticker", "trading_date", "adj_factor", "adjusted_close", "adjusted_volume", "raw_close"]]
+            .itertuples(index=False, name=None)
+        )
+
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.adjusted_price_daily
+                            (ticker, trading_date, adj_factor, adjusted_close, adjusted_volume, raw_close)
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            adj_factor       = EXCLUDED.adj_factor,
+                            adjusted_close   = EXCLUDED.adjusted_close,
+                            adjusted_volume  = EXCLUDED.adjusted_volume,
+                            raw_close        = EXCLUDED.raw_close,
+                            ingested_at      = NOW()
+                        """,
+                        insert_rows,
+                    )
+            print(f"Upserted {len(df)} rows into public.adjusted_price_daily")
+        finally:
+            conn.close()
 
     # DAG wiring
     tickers = fetch_tickers_with_dividends()
     vnindex_done = ingest_vnindex()
-    # VNINDEX must be in fact_stock_daily before calculate_adjusted reads it
+    # VNINDEX must be in market_data_prices before calculate_adjusted reads it
     vnindex_done >> tickers
     adjusted_rows = calculate_adjusted(tickers)
-    upsert_adjusted_ohlcv(adjusted_rows)
+    upsert_adjusted_prices(adjusted_rows)

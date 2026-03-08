@@ -4,7 +4,8 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from datetime import datetime, timedelta
 from pendulum import timezone
 import pandas as pd
-import clickhouse_connect
+import psycopg2
+import psycopg2.extras
 import os
 import sys
 
@@ -24,10 +25,7 @@ from etl_modules.notifications import (
 )
 
 # CONFIG
-CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
-CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 default_args = {
     "owner": "data_engineer",
@@ -44,7 +42,7 @@ with DAG(
     schedule="0 18 * * 1-5",  # 6 PM Vietnam Time Mon-Fri
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
-    tags=["stock-price", "financials", "clickhouse", "evening-batch"],
+    tags=["stock-price", "financials", "supabase", "evening-batch"],
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
@@ -85,15 +83,12 @@ with DAG(
             print("No price data to load.")
             return
 
-        print(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}...")
-        client = clickhouse_connect.get_client(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            username=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASSWORD,
-        )
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        print(f"Inserting {len(data)} price rows...")
+        print(f"Connecting to Supabase/Postgres...")
+        conn = psycopg2.connect(SUPABASE_DB_URL)
+
         price_cols = [
             "trading_date",
             "close",
@@ -108,21 +103,48 @@ with DAG(
             "macd_hist",
             "source",
         ]
-        price_tuples = []
+
+        rows = []
         for row in data:
-            # Convert trading_date back to date object
             if row.get("trading_date"):
                 row["trading_date"] = datetime.strptime(
                     row["trading_date"], "%Y-%m-%d"
                 ).date()
-            price_tuples.append([row.get(col) for col in price_cols])
+            rows.append(tuple(row.get(col) for col in price_cols))
 
-        client.insert(
-            "portfolios_tracker_dw.fact_stock_daily",
-            price_tuples,
-            column_names=price_cols,
-        )
-        print("Price insertion complete.")
+        print(f"Upserting {len(rows)} price rows into market_data_prices...")
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.market_data_prices
+                            (trading_date, open, high, low, close, volume, ticker,
+                             daily_return, ma_50, ma_200, rsi_14, macd, macd_signal,
+                             macd_hist, source)
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            open          = EXCLUDED.open,
+                            high          = EXCLUDED.high,
+                            low           = EXCLUDED.low,
+                            close         = EXCLUDED.close,
+                            volume        = EXCLUDED.volume,
+                            daily_return  = EXCLUDED.daily_return,
+                            ma_50         = EXCLUDED.ma_50,
+                            ma_200        = EXCLUDED.ma_200,
+                            rsi_14        = EXCLUDED.rsi_14,
+                            macd          = EXCLUDED.macd,
+                            macd_signal   = EXCLUDED.macd_signal,
+                            macd_hist     = EXCLUDED.macd_hist,
+                            source        = EXCLUDED.source,
+                            ingested_at   = NOW()
+                        """,
+                        rows,
+                    )
+            print("Price upsert complete.")
+        finally:
+            conn.close()
 
     # --- TASK GROUP 2: RATIOS ---
     @task
@@ -151,14 +173,11 @@ with DAG(
             print("No ratio data to load.")
             return
 
-        client = clickhouse_connect.get_client(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            username=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASSWORD,
-        )
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        print(f"Inserting {len(data)} financial ratio rows...")
+        conn = psycopg2.connect(SUPABASE_DB_URL)
+
         ratio_cols = [
             "ticker",
             "fiscal_date",
@@ -179,9 +198,9 @@ with DAG(
             "net_profit_margin",
             "debt_to_equity",
         ]
-        ratio_tuples = []
+
+        rows = []
         for row in data:
-            # Convert fiscal_date back to date object
             if row.get("fiscal_date"):
                 try:
                     row["fiscal_date"] = datetime.strptime(
@@ -189,14 +208,45 @@ with DAG(
                     ).date()
                 except ValueError:
                     pass
-            ratio_tuples.append([row.get(col, 0) for col in ratio_cols])
+            rows.append(tuple(row.get(col, 0) for col in ratio_cols))
 
-        client.insert(
-            "portfolios_tracker_dw.fact_financial_ratios",
-            ratio_tuples,
-            column_names=ratio_cols,
-        )
-        print("Financial ratio insertion complete.")
+        print(f"Upserting {len(rows)} financial ratio rows into market_data_financial_ratios...")
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.market_data_financial_ratios
+                            (ticker, fiscal_date, year, quarter, pe_ratio, pb_ratio,
+                             ps_ratio, p_cashflow_ratio, eps, bvps, market_cap, roe,
+                             roa, roic, financial_leverage, dividend_yield,
+                             net_profit_margin, debt_to_equity)
+                        VALUES %s
+                        ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
+                            year              = EXCLUDED.year,
+                            quarter           = EXCLUDED.quarter,
+                            pe_ratio          = EXCLUDED.pe_ratio,
+                            pb_ratio          = EXCLUDED.pb_ratio,
+                            ps_ratio          = EXCLUDED.ps_ratio,
+                            p_cashflow_ratio  = EXCLUDED.p_cashflow_ratio,
+                            eps               = EXCLUDED.eps,
+                            bvps              = EXCLUDED.bvps,
+                            market_cap        = EXCLUDED.market_cap,
+                            roe               = EXCLUDED.roe,
+                            roa               = EXCLUDED.roa,
+                            roic              = EXCLUDED.roic,
+                            financial_leverage = EXCLUDED.financial_leverage,
+                            dividend_yield    = EXCLUDED.dividend_yield,
+                            net_profit_margin = EXCLUDED.net_profit_margin,
+                            debt_to_equity    = EXCLUDED.debt_to_equity,
+                            ingested_at       = NOW()
+                        """,
+                        rows,
+                    )
+            print("Financial ratio upsert complete.")
+        finally:
+            conn.close()
 
     # --- TASK GROUP 3: FUNDAMENTALS (Dividends & Income Stmt) ---
     @task
@@ -246,84 +296,102 @@ with DAG(
             print("No fundamental data to load.")
             return
 
-        client = clickhouse_connect.get_client(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            username=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASSWORD,
-        )
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        # Load Dividends
-        divs = data.get("dividends", [])
-        if divs:
-            print(f"Inserting {len(divs)} dividend rows...")
-            div_cols = [
-                "ticker",
-                "exercise_date",
-                "cash_year",
-                "cash_dividend_percentage",
-                "stock_dividend_percentage",
-                "issue_method",
-            ]
-            div_tuples = []
-            for row in divs:
-                # Convert exercise_date back to date object
-                if row.get("exercise_date"):
-                    row["exercise_date"] = datetime.strptime(
-                        row["exercise_date"], "%Y-%m-%d"
-                    ).date()
-                div_tuples.append([row.get(col) for col in div_cols])
+        conn = psycopg2.connect(SUPABASE_DB_URL)
 
-            client.insert(
-                "portfolios_tracker_dw.fact_dividends",
-                div_tuples,
-                column_names=div_cols,
-            )
-            print("Dividend insertion complete.")
+        try:
+            # Load Dividends
+            divs = data.get("dividends", [])
+            if divs:
+                print(f"Upserting {len(divs)} dividend rows into market_data_dividends...")
+                div_cols = [
+                    "ticker",
+                    "exercise_date",
+                    "cash_year",
+                    "cash_dividend_percentage",
+                    "stock_dividend_percentage",
+                    "issue_method",
+                ]
+                div_rows = []
+                for row in divs:
+                    if row.get("exercise_date"):
+                        row["exercise_date"] = datetime.strptime(
+                            row["exercise_date"], "%Y-%m-%d"
+                        ).date()
+                    div_rows.append(tuple(row.get(col) for col in div_cols))
 
-        # Load Income Statement
-        income = data.get("income_stmt", [])
-        if income:
-            print(f"Inserting {len(income)} income statement rows...")
-            inc_cols = [
-                "ticker",
-                "fiscal_date",
-                "year",
-                "quarter",
-                "revenue",
-                "cost_of_goods_sold",
-                "gross_profit",
-                "operating_profit",
-                "net_profit_post_tax",
-            ]
-            inc_tuples = []
-            for row in income:
-                # Convert fiscal_date back to date object
-                if row.get("fiscal_date"):
-                    row["fiscal_date"] = datetime.strptime(
-                        row["fiscal_date"], "%Y-%m-%d"
-                    ).date()
-                # Handle None values for numeric columns (ClickHouse Decimal doesn't like None)
-                vals = []
-                for col in inc_cols:
-                    val = row.get(col)
-                    # If value is None and it's a metric column (not metadata), default to 0
-                    if val is None and col not in [
-                        "ticker",
-                        "fiscal_date",
-                        "year",
-                        "quarter",
-                    ]:
-                        val = 0
-                    vals.append(val)
-                inc_tuples.append(vals)
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO public.market_data_dividends
+                                (ticker, exercise_date, cash_year,
+                                 cash_dividend_percentage, stock_dividend_percentage,
+                                 issue_method)
+                            VALUES %s
+                            ON CONFLICT (ticker, exercise_date) DO UPDATE SET
+                                cash_year                   = EXCLUDED.cash_year,
+                                cash_dividend_percentage    = EXCLUDED.cash_dividend_percentage,
+                                stock_dividend_percentage   = EXCLUDED.stock_dividend_percentage,
+                                issue_method                = EXCLUDED.issue_method,
+                                ingested_at                 = NOW()
+                            """,
+                            div_rows,
+                        )
+                print("Dividend upsert complete.")
 
-            client.insert(
-                "portfolios_tracker_dw.fact_income_statement",
-                inc_tuples,
-                column_names=inc_cols,
-            )
-            print("Income statement insertion complete.")
+            # Load Income Statement
+            income = data.get("income_stmt", [])
+            if income:
+                print(f"Upserting {len(income)} income statement rows into market_data_income_statements...")
+                inc_cols = [
+                    "ticker",
+                    "fiscal_date",
+                    "year",
+                    "quarter",
+                    "revenue",
+                    "cost_of_goods_sold",
+                    "gross_profit",
+                    "operating_profit",
+                    "net_profit_post_tax",
+                ]
+                inc_rows = []
+                for row in income:
+                    if row.get("fiscal_date"):
+                        row["fiscal_date"] = datetime.strptime(
+                            row["fiscal_date"], "%Y-%m-%d"
+                        ).date()
+                    # Postgres Numeric accepts None (NULL), no need to coerce to 0
+                    inc_rows.append(tuple(row.get(col) for col in inc_cols))
+
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO public.market_data_income_statements
+                                (ticker, fiscal_date, year, quarter, revenue,
+                                 cost_of_goods_sold, gross_profit, operating_profit,
+                                 net_profit_post_tax)
+                            VALUES %s
+                            ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
+                                year                = EXCLUDED.year,
+                                quarter             = EXCLUDED.quarter,
+                                revenue             = EXCLUDED.revenue,
+                                cost_of_goods_sold  = EXCLUDED.cost_of_goods_sold,
+                                gross_profit        = EXCLUDED.gross_profit,
+                                operating_profit    = EXCLUDED.operating_profit,
+                                net_profit_post_tax = EXCLUDED.net_profit_post_tax,
+                                ingested_at         = NOW()
+                            """,
+                            inc_rows,
+                        )
+                print("Income statement upsert complete.")
+        finally:
+            conn.close()
 
     # --- ORCHESTRATION WITH PARALLEL TASK GROUPS ---
 
