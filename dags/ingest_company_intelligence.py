@@ -72,7 +72,7 @@ def build_embedding_text(
     Concatenate company profile text with sector taxonomy for embedding.
 
     Why: Embedding the sector context alongside the profile text improves
-    semantic search quality for thematic clustering.
+    semantic search quality for portfolio builder clustering.
     """
     sector_parts = [p for p in [icb_name2, icb_name3, icb_name4] if p and p.strip()]
     sector_str = " > ".join(sector_parts) if sector_parts else "Unknown"

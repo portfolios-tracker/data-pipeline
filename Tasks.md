@@ -13,7 +13,7 @@ This task list tracks epic-alignment actions for `services/data-pipeline`.
 
 - [x] Keep `README.md` DAG inventory in sync with code when DAGs/schedules change.
 - [x] Align `docs/architecture-data-pipeline.md` with actual responsibilities (ETL + enrichment, not scheduler-only).
-- [x] Add epic coverage notes per DAG (Epic 7/9/thematic PoC) to reduce planning drift.
+- [x] Add epic coverage notes per DAG (Epic 7/9/Agentic Portfolio Creation) to reduce planning drift.
 
 ## Priority 3 - Scope Hygiene
 
@@ -25,4 +25,3 @@ This task list tracks epic-alignment actions for `services/data-pipeline`.
 - [x] Mark `scripts/manual_load_data.py` as local/dev-only and document safe usage boundaries.
 - [x] Review fallback ticker behavior in `dags/etl_modules/fetcher.py` — added `raise_on_fallback` parameter; task callers now use `raise_on_fallback=True` to prevent silent partial ingestion in production.
 - [x] Add CI check that validates DAG list/schedule snippets in README against actual DAG definitions (`scripts/validate_dag_registry.py` + CI step in `.github/workflows/test.yml`).
-
