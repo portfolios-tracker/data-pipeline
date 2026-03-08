@@ -82,7 +82,7 @@ Test individual functions in isolation with mocked external dependencies.
 - `send_success_notification()` - Success callback wrapper
 - `send_failure_notification()` - Failure callback wrapper
 - `send_telegram_news_summary()` - News digest with AI
-- `get_latest_stock_data()` - ClickHouse data retrieval
+- `get_latest_stock_data()` - Historical market-data retrieval
 - `summarize_news_with_gemini()` - AI summary generation
 
 ### Integration Tests (`@pytest.mark.integration`)
@@ -93,7 +93,7 @@ Test end-to-end workflows with real or test databases.
 
 ### Data Quality Tests
 
-Validate data integrity in ClickHouse after ETL runs.
+Validate data integrity in Supabase market-data tables after ETL runs.
 
 **Status:** TODO - To be implemented in Phase 3
 
@@ -146,7 +146,6 @@ def test_with_mock(mock_quote_class):
 See [conftest.py](conftest.py) for all available fixtures:
 
 - `mock_environment_variables` - Mock env vars (auto-applied)
-- `mock_clickhouse_client` - Mock ClickHouse client
 - `sample_stock_price_df` - Sample OHLCV data with indicators
 - `sample_financial_ratios_df` - Sample quarterly ratios
 - `sample_income_statement_df` - Sample P&L data
@@ -239,7 +238,7 @@ def test_api_call():
 - DAG structure validation
 - Task dependency validation
 - End-to-end pipeline tests
-- ClickHouse schema validation
+- Market-data schema validation
 
 ### Phase 4: Data Quality Tests
 
