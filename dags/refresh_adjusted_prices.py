@@ -93,69 +93,69 @@ with DAG(
         (treated as a zero-dividend index: adj_factor = 1.0).
         """
         conn = _get_conn()
-        end_date = date.today().isoformat()
-        start_date = (
-            date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
-        )
+        try:
+            end_date = date.today().isoformat()
+            start_date = (
+                date.today().replace(year=date.today().year - HISTORY_YEARS).isoformat()
+            )
 
-        df = fetch_index_history(VNINDEX_SYMBOL, start_date, end_date)
-        if df.empty:
-            print("WARNING: No VNINDEX data fetched — skipping upsert")
-            conn.close()
-            return
+            df = fetch_index_history(VNINDEX_SYMBOL, start_date, end_date)
+            if df.empty:
+                print("WARNING: No VNINDEX data fetched — skipping upsert")
+                return
 
-        cols = [
-            "ticker",
-            "trading_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "ma_50",
-            "ma_200",
-            "rsi_14",
-            "daily_return",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-            "source",
-        ]
-        df = df[[c for c in cols if c in df.columns]]
-        if "trading_date" in df.columns:
+            cols = [
+                "ticker",
+                "trading_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "ma_50",
+                "ma_200",
+                "rsi_14",
+                "daily_return",
+                "macd",
+                "macd_signal",
+                "macd_hist",
+                "source",
+            ]
+            df = df[[c for c in cols if c in df.columns]]
             df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
 
-        rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
-        present_cols = [c for c in cols if c in df.columns]
+            rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
+            present_cols = [c for c in cols if c in df.columns]
 
-        with conn:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_values(
-                    cur,
-                    f"""
-                    INSERT INTO public.market_data_prices
-                        ({", ".join(present_cols)})
-                    VALUES %s
-                    ON CONFLICT (ticker, trading_date) DO UPDATE SET
-                        open        = EXCLUDED.open,
-                        high        = EXCLUDED.high,
-                        low         = EXCLUDED.low,
-                        close       = EXCLUDED.close,
-                        volume      = EXCLUDED.volume,
-                        ma_50       = EXCLUDED.ma_50,
-                        ma_200      = EXCLUDED.ma_200,
-                        rsi_14      = EXCLUDED.rsi_14,
-                        daily_return = EXCLUDED.daily_return,
-                        macd        = EXCLUDED.macd,
-                        macd_signal = EXCLUDED.macd_signal,
-                        macd_hist   = EXCLUDED.macd_hist,
-                        source      = EXCLUDED.source,
-                        ingested_at = NOW()
-                    """,
-                    rows,
-                )
-        conn.close()
-        print(f"Upserted {len(df)} VNINDEX rows into market_data_prices")
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        f"""
+                        INSERT INTO public.market_data_prices
+                            ({", ".join(present_cols)})
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            open        = EXCLUDED.open,
+                            high        = EXCLUDED.high,
+                            low         = EXCLUDED.low,
+                            close       = EXCLUDED.close,
+                            volume      = EXCLUDED.volume,
+                            ma_50       = EXCLUDED.ma_50,
+                            ma_200      = EXCLUDED.ma_200,
+                            rsi_14      = EXCLUDED.rsi_14,
+                            daily_return = EXCLUDED.daily_return,
+                            macd        = EXCLUDED.macd,
+                            macd_signal = EXCLUDED.macd_signal,
+                            macd_hist   = EXCLUDED.macd_hist,
+                            source      = EXCLUDED.source,
+                            ingested_at = NOW()
+                        """,
+                        rows,
+                    )
+            print(f"Upserted {len(df)} VNINDEX rows into market_data_prices")
+        finally:
+            conn.close()
 
     @task
     def calculate_adjusted(tickers: list[str]):
@@ -253,11 +253,10 @@ with DAG(
         df["adjusted_close"] = df["adjusted_close"].astype(float)
         df["raw_close"] = df["raw_close"].astype(float)
 
-        insert_rows = [
-            (row["ticker"], row["trading_date"], row["adj_factor"],
-             row["adjusted_close"], row["raw_close"])
-            for row in df.to_dict(orient="records")
-        ]
+        insert_rows = list(
+            df[["ticker", "trading_date", "adj_factor", "adjusted_close", "raw_close"]]
+            .itertuples(index=False, name=None)
+        )
 
         with conn:
             with conn.cursor() as cur:
