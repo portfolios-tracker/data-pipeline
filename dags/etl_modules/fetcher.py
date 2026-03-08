@@ -105,7 +105,7 @@ def fetch_stock_price(symbol, start_date, end_date):
             columns={"time": "trading_date", "date": "trading_date"}, inplace=True
         )
 
-        required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
+        required_cols = ["trading_date", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
         df["ticker"] = symbol
         df["source"] = "vnstock"
@@ -122,7 +122,7 @@ def fetch_stock_price(symbol, start_date, end_date):
     df["trading_date"] = df["trading_date"].dt.date
 
     # Clean for Decimal
-    df = clean_decimal_cols(df, ["open", "high", "low", "close"])
+    df = clean_decimal_cols(df, ["close"])
     df["volume"] = df["volume"].fillna(0).astype(int)
 
     # Technical Indicators
@@ -397,7 +397,8 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
     Returns
     -------
     pd.DataFrame
-        Columns matching fact_stock_daily schema with indicator columns set to 0.
+        Columns matching fact_stock_daily schema with close/volume plus
+        indicator columns set to 0.
     """
     logging.info("Fetching index history for %s (%s → %s)", symbol, start_date, end_date)
     try:
@@ -418,7 +419,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
         df["ticker"] = symbol
         df["source"] = "vnstock_index"
 
-        df = clean_decimal_cols(df, ["open", "high", "low", "close"])
+        df = clean_decimal_cols(df, ["close"])
         df["volume"] = df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
 
         # Technical indicators are not meaningful for indices in this context; set to 0.
@@ -426,7 +427,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
             df[col] = 0.0
 
         required_cols = [
-            "ticker", "trading_date", "open", "high", "low", "close", "volume",
+            "ticker", "trading_date", "close", "volume",
             "ma_50", "ma_200", "rsi_14", "daily_return", "macd", "macd_signal", "macd_hist",
             "source",
         ]

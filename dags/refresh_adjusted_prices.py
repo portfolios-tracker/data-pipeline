@@ -106,9 +106,6 @@ with DAG(
         cols = [
             "ticker",
             "trading_date",
-            "open",
-            "high",
-            "low",
             "close",
             "volume",
             "ma_50",
@@ -144,7 +141,7 @@ with DAG(
             # --- Raw prices ---
             price_result = client.query(
                 """
-                SELECT trading_date, close
+                                SELECT trading_date, close, volume
                 FROM portfolios_tracker_dw.fact_stock_daily FINAL
                 WHERE ticker = {ticker:String}
                   AND trading_date BETWEEN {start_date:String} AND {end_date:String}
@@ -161,7 +158,7 @@ with DAG(
                 continue
 
             raw_prices = pd.DataFrame(
-                price_result.result_rows, columns=["trading_date", "close"]
+                price_result.result_rows, columns=["trading_date", "close", "volume"]
             )
 
             # --- Dividends ---
@@ -218,6 +215,7 @@ with DAG(
         # Ensure column types match ClickHouse schema
         df["adj_factor"] = df["adj_factor"].astype(float)
         df["adjusted_close"] = df["adjusted_close"].astype(float)
+        df["adjusted_volume"] = df["adjusted_volume"].astype(float)
         df["raw_close"] = df["raw_close"].astype(
             float
         )  # ClickHouse driver handles Decimal64

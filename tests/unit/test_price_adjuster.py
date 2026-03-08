@@ -20,14 +20,10 @@ from dags.etl_modules.price_adjuster import calculate_adjusted_prices
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Updated to include full OHLCV columns now returned by calculate_adjusted_prices
 REQUIRED_COLUMNS = {
     "ticker",
     "trading_date",
     "adjusted_close",
-    "adjusted_open",
-    "adjusted_high",
-    "adjusted_low",
     "adjusted_volume",
     "raw_close",
     "adj_factor",

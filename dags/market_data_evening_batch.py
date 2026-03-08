@@ -96,9 +96,6 @@ with DAG(
         print(f"Inserting {len(data)} price rows...")
         price_cols = [
             "trading_date",
-            "open",
-            "high",
-            "low",
             "close",
             "volume",
             "ticker",

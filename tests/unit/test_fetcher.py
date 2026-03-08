@@ -125,9 +125,6 @@ class TestFetchStockPrice:
         mock_df = pd.DataFrame(
             {
                 "time": pd.date_range("2024-01-01", periods=10),
-                "open": [100.0] * 10,
-                "high": [101.0] * 10,
-                "low": [99.0] * 10,
                 "close": [100.5] * 10,
                 "volume": [1000000] * 10,
             }
@@ -176,9 +173,6 @@ class TestFetchStockPrice:
         mock_df = pd.DataFrame(
             {
                 "time": dates,
-                "open": prices,
-                "high": [p * 1.01 for p in prices],
-                "low": [p * 0.99 for p in prices],
                 "close": prices,
                 "volume": [1000000] * 250,
             }
@@ -199,15 +193,12 @@ class TestFetchStockPrice:
 
     @patch("dags.etl_modules.fetcher.Quote")
     def test_nan_values_cleaned(self, mock_quote_class):
-        """Test that NaN values in prices are cleaned to 0."""
+        """Test that NaN values in close prices are cleaned to 0."""
         mock_quote = Mock()
         mock_df = pd.DataFrame(
             {
                 "time": pd.date_range("2024-01-01", periods=10),
-                "open": [100.0, np.nan, 102.0] + [100.0] * 7,
-                "high": [101.0] * 10,
-                "low": [99.0] * 10,
-                "close": [100.5] * 10,
+                "close": [100.5, np.nan, 102.0] + [100.0] * 7,
                 "volume": [1000000] * 10,
             }
         )
@@ -216,8 +207,8 @@ class TestFetchStockPrice:
 
         result = fetch_stock_price("HPG", "2024-01-01", "2024-01-10")
 
-        assert result["open"].isna().sum() == 0
-        assert result["open"].iloc[1] == 0.0
+        assert result["close"].isna().sum() == 0
+        assert result["close"].iloc[1] == 0.0
 
     @patch("dags.etl_modules.fetcher.Quote")
     def test_trading_date_converted_to_date(self, mock_quote_class):
@@ -226,9 +217,6 @@ class TestFetchStockPrice:
         mock_df = pd.DataFrame(
             {
                 "time": pd.date_range("2024-01-01", periods=5),
-                "open": [100.0] * 5,
-                "high": [101.0] * 5,
-                "low": [99.0] * 5,
                 "close": [100.5] * 5,
                 "volume": [1000000] * 5,
             }

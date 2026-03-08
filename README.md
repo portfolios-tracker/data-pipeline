@@ -35,7 +35,7 @@ graph LR
 | :---------------------------- | :----------------- | :----------------------------------------- | :----------------------------------------------------------------------------- |
 | `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) to ClickHouse. |
 | `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, ratios, dividends, and income statements.           |
-| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted OHLCV series for total-return backtests.            |
+| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests. |
 | `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in ClickHouse, sends AI summary to Telegram.     |
 | `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                       |
 | `sync_assets_to_postgres`     | Daily (3 AM)       | Epic 9.1 – Asset Sync                      | Syncs ClickHouse asset dimensions back to Supabase Postgres.                   |
@@ -127,6 +127,10 @@ uv run python scripts/manual_load_data.py --yes-really-run --update-companies
 ### `scripts/init_clickhouse_schema.py`
 
 Creates all ClickHouse tables and databases. Run once on a fresh cluster. Idempotent (`CREATE TABLE IF NOT EXISTS`).
+
+### `scripts/migrate_price_series_schema.py`
+
+One-time ClickHouse reshape for existing environments that still have raw OHLC and adjusted OHLC columns. Drops unused open/high/low columns from `fact_stock_daily` and `adjusted_ohlcv`, then reapplies the base schema so views stay aligned.
 
 ### `scripts/validate_dag_registry.py`
 

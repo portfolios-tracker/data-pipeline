@@ -103,17 +103,16 @@ ORDER BY (asset_class, market, symbol)
 PARTITION BY asset_class;
 
 -- ===================================================================
--- FACT: Daily Stock Prices
+-- FACT: Daily Price Series
 -- ===================================================================
--- Largest table — partitioned by month for efficient range scans and TTL.
+-- Builder-oriented raw daily market table.
+-- We keep close + volume + derived indicators; TradingView covers full OHLC
+-- chart rendering on the product side, so open/high/low are omitted here.
 -- ORDER BY (ticker, trading_date) optimises per-stock time-series queries.
 -- ===================================================================
 CREATE TABLE IF NOT EXISTS portfolios_tracker_dw.fact_stock_daily (
     ticker         String,
     trading_date   Date,
-    open           Decimal64(2),
-    high           Decimal64(2),
-    low            Decimal64(2),
     close          Decimal64(2),
     volume         UInt64,
     ma_50          Float64    DEFAULT 0,
@@ -216,21 +215,18 @@ ORDER BY (ticker, publish_date, news_id)
 PARTITION BY toYYYYMM(publish_date);
 
 -- ===================================================================
--- DERIVED: Backward-Adjusted OHLCV Prices
+-- DERIVED: Backward-Adjusted Price Series
 -- ===================================================================
 -- Populated by the refresh_adjusted_prices Airflow DAG.
 -- Raw prices (fact_stock_daily) are NEVER modified; this table is purely
 -- derived and can be truncated + rebuilt at any time.
 --
--- Includes full OHLCV for charting; adj_factor applied to all price columns.
--- raw_close kept as reference anchor.
+-- Legacy table name retained for compatibility, but the builder only needs
+-- adjusted_close plus adjusted_volume, raw_close, and adj_factor.
 -- ===================================================================
 CREATE TABLE IF NOT EXISTS portfolios_tracker_dw.adjusted_ohlcv (
     ticker          String,
     trading_date    Date,
-    adjusted_open   Float64,                           -- Backward-adjusted open
-    adjusted_high   Float64,                           -- Backward-adjusted high
-    adjusted_low    Float64,                           -- Backward-adjusted low
     adjusted_close  Float64,                           -- Backward-adjusted close
     adjusted_volume Float64  DEFAULT 0,                -- Volume (inverse-adjusted for splits)
     raw_close       Decimal64(2),                      -- Original close from fact_stock_daily
@@ -257,9 +253,6 @@ SELECT
     d.sector                     AS sector,
     d.industry                   AS industry,
     f.trading_date               AS trading_date,
-    f.open                       AS open,
-    f.high                       AS high,
-    f.low                        AS low,
     f.close                      AS close,
     f.volume                     AS volume,
     f.daily_return               AS daily_return,
