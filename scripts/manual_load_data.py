@@ -118,9 +118,6 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
         price_cols = [
             "ticker",
             "trading_date",
-            "open",
-            "high",
-            "low",
             "close",
             "volume",
             "ma_50",
@@ -152,9 +149,6 @@ def manual_load(start_date, end_date, price_only=False, ratios_only=False):
 
         # Replace NaN/None with 0 for numeric columns
         numeric_cols = [
-            "open",
-            "high",
-            "low",
             "close",
             "ma_50",
             "ma_200",

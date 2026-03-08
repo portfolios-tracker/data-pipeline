@@ -21,9 +21,9 @@ No ClickHouse connection required in this module — data is passed as DataFrame
 so that unit tests can run without any infrastructure.
 """
 
-import pandas as pd
-import numpy as np
 import logging
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,8 @@ def calculate_adjusted_prices(
     ----------
     raw_prices : pd.DataFrame
         Must contain columns: ``trading_date`` (date), ``close`` (numeric).
-        Optional columns: ``open``, ``high``, ``low``, ``volume`` — carried
-        through for full OHLCV output required by Story 2.2 charting.
-        Missing OHLCV columns default to 0.
+        Optional column: ``volume``. The builder consumes a close-based series;
+        TradingView handles detailed asset charting elsewhere in the product.
     dividends : pd.DataFrame
         Must contain columns: ``exercise_date`` (date-like),
         ``cash_dividend_percentage`` (float), ``stock_dividend_percentage`` (float).
@@ -53,34 +52,24 @@ def calculate_adjusted_prices(
     Returns
     -------
     pd.DataFrame
-        Columns: ticker, trading_date, adjusted_close, adjusted_open,
-                 adjusted_high, adjusted_low, adjusted_volume, raw_close, adj_factor
+        Columns: ticker, trading_date, adjusted_close, adjusted_volume,
+                 raw_close, adj_factor
     """
     if raw_prices.empty:
         logger.warning("calculate_adjusted_prices: empty raw_prices for %s", ticker)
         return pd.DataFrame(
             columns=[
                 "ticker", "trading_date",
-                "adjusted_close", "adjusted_open", "adjusted_high", "adjusted_low",
-                "adjusted_volume", "raw_close", "adj_factor",
+                "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
             ]
         )
 
-    # Carry through OHLCV; default missing price columns to close, volume to 0
-    ohlcv_cols = ["trading_date", "close"]
-    for col in ["open", "high", "low", "volume"]:
-        if col in raw_prices.columns:
-            ohlcv_cols.append(col)
-
-    df = raw_prices[ohlcv_cols].copy()
+    df = raw_prices[[c for c in ["trading_date", "close", "volume"] if c in raw_prices.columns]].copy()
     df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
     df = df.sort_values("trading_date").reset_index(drop=True)
 
-    # Adjusted price columns — start equal to raw prices
+    # Adjusted close starts equal to raw close.
     df["adjusted_close"] = df["close"].astype(float)
-    df["adjusted_open"]  = df["open"].astype(float)  if "open"   in df.columns else df["close"].astype(float)
-    df["adjusted_high"]  = df["high"].astype(float)  if "high"   in df.columns else df["close"].astype(float)
-    df["adjusted_low"]   = df["low"].astype(float)   if "low"    in df.columns else df["close"].astype(float)
     # raw_close preserved without modification throughout the algorithm
     df["raw_close"] = df["close"].astype(float)
     df["cumulative_factor"] = 1.0
@@ -92,8 +81,7 @@ def calculate_adjusted_prices(
         df["adj_factor"] = df["cumulative_factor"]
         return df[[
             "ticker", "trading_date",
-            "adjusted_close", "adjusted_open", "adjusted_high", "adjusted_low",
-            "adjusted_volume", "raw_close", "adj_factor",
+            "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
         ]]
 
     # Sort corporate actions in DESCENDING order: most recent first.
@@ -146,9 +134,6 @@ def calculate_adjusted_prices(
         # Apply to all dates STRICTLY BEFORE ex_date (backward adjustment)
         prior_mask = df["trading_date"] < ex_date
         df.loc[prior_mask, "adjusted_close"] *= combined_factor
-        df.loc[prior_mask, "adjusted_open"]  *= combined_factor
-        df.loc[prior_mask, "adjusted_high"]  *= combined_factor
-        df.loc[prior_mask, "adjusted_low"]   *= combined_factor
         df.loc[prior_mask, "cumulative_factor"] *= combined_factor
 
         # Volume scales inversely: more shares outstanding after split
@@ -161,6 +146,5 @@ def calculate_adjusted_prices(
     df["adj_factor"] = df["cumulative_factor"]
     return df[[
         "ticker", "trading_date",
-        "adjusted_close", "adjusted_open", "adjusted_high", "adjusted_low",
-        "adjusted_volume", "raw_close", "adj_factor",
+        "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
     ]]

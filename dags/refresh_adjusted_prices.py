@@ -29,7 +29,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from etl_modules.fetcher import fetch_index_history
 from etl_modules.price_adjuster import calculate_adjusted_prices
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 local_tz = timezone("Asia/Bangkok")
 
@@ -42,9 +42,9 @@ VNINDEX_SYMBOL = "VNINDEX"
 def _get_conn():
     """Open a psycopg2 connection. Always called inside a task to avoid
     module-level connection objects (consistent with data-pipeline pattern)."""
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL environment variable is not set")
-    return psycopg2.connect(DATABASE_URL)
+    if not SUPABASE_DB_URL:
+        raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
+    return psycopg2.connect(SUPABASE_DB_URL)
 
 
 with DAG(
@@ -173,62 +173,64 @@ with DAG(
         all_tickers = sorted(set(tickers + [VNINDEX_SYMBOL]))
         all_rows: list[dict] = []
 
-        with conn.cursor() as cur:
-            for ticker in all_tickers:
-                # --- Raw prices ---
-                cur.execute(
-                    """
-                    SELECT trading_date::text, close::text
-                    FROM public.market_data_prices
-                    WHERE ticker = %s
-                      AND trading_date BETWEEN %s::date AND %s::date
-                    ORDER BY trading_date
-                    """,
-                    (ticker, start_date, end_date),
-                )
-                price_rows = cur.fetchall()
-                if not price_rows:
-                    print(f"No price data for {ticker} — skipping adjustment")
-                    continue
-
-                raw_prices = pd.DataFrame(price_rows, columns=["trading_date", "close"])
-
-                # --- Dividends ---
-                if ticker == VNINDEX_SYMBOL:
-                    dividends = pd.DataFrame(
-                        columns=[
-                            "exercise_date",
-                            "cash_dividend_percentage",
-                            "stock_dividend_percentage",
-                        ]
-                    )
-                else:
+        try:
+            with conn.cursor() as cur:
+                for ticker in all_tickers:
+                    # --- Raw prices ---
                     cur.execute(
                         """
-                        SELECT exercise_date::text,
-                               cash_dividend_percentage::text,
-                               stock_dividend_percentage::text
-                        FROM public.market_data_dividends
+                        SELECT trading_date::text, close::text, volume::text
+                        FROM public.market_data_prices
                         WHERE ticker = %s
-                        ORDER BY exercise_date
+                          AND trading_date BETWEEN %s::date AND %s::date
+                        ORDER BY trading_date
                         """,
-                        (ticker,),
+                        (ticker, start_date, end_date),
                     )
-                    div_rows = cur.fetchall()
-                    dividends = pd.DataFrame(
-                        div_rows,
-                        columns=[
-                            "exercise_date",
-                            "cash_dividend_percentage",
-                            "stock_dividend_percentage",
-                        ],
-                    )
+                    price_rows = cur.fetchall()
+                    if not price_rows:
+                        print(f"No price data for {ticker} — skipping adjustment")
+                        continue
 
-                adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
-                if not adjusted_df.empty:
-                    all_rows.extend(adjusted_df.to_dict(orient="records"))
+                    raw_prices = pd.DataFrame(price_rows, columns=["trading_date", "close", "volume"])
 
-        conn.close()
+                    # --- Dividends ---
+                    if ticker == VNINDEX_SYMBOL:
+                        dividends = pd.DataFrame(
+                            columns=[
+                                "exercise_date",
+                                "cash_dividend_percentage",
+                                "stock_dividend_percentage",
+                            ]
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT exercise_date::text,
+                                   cash_dividend_percentage::text,
+                                   stock_dividend_percentage::text
+                            FROM public.market_data_dividends
+                            WHERE ticker = %s
+                            ORDER BY exercise_date
+                            """,
+                            (ticker,),
+                        )
+                        div_rows = cur.fetchall()
+                        dividends = pd.DataFrame(
+                            div_rows,
+                            columns=[
+                                "exercise_date",
+                                "cash_dividend_percentage",
+                                "stock_dividend_percentage",
+                            ],
+                        )
+
+                    adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
+                    if not adjusted_df.empty:
+                        all_rows.extend(adjusted_df.to_dict(orient="records"))
+        finally:
+            conn.close()
+
         print(
             f"Calculated adjusted prices for {len(all_tickers)} tickers → {len(all_rows)} rows"
         )
@@ -251,31 +253,35 @@ with DAG(
         # and cast to float for Postgres Numeric columns.
         df["adj_factor"] = df["adj_factor"].astype(float)
         df["adjusted_close"] = df["adjusted_close"].astype(float)
+        df["adjusted_volume"] = df["adjusted_volume"].astype(float)
         df["raw_close"] = df["raw_close"].astype(float)
 
         insert_rows = list(
-            df[["ticker", "trading_date", "adj_factor", "adjusted_close", "raw_close"]]
+            df[["ticker", "trading_date", "adj_factor", "adjusted_close", "adjusted_volume", "raw_close"]]
             .itertuples(index=False, name=None)
         )
 
-        with conn:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_values(
-                    cur,
-                    """
-                    INSERT INTO public.adjusted_price_daily
-                        (ticker, trading_date, adj_factor, adjusted_close, raw_close)
-                    VALUES %s
-                    ON CONFLICT (ticker, trading_date) DO UPDATE SET
-                        adj_factor     = EXCLUDED.adj_factor,
-                        adjusted_close = EXCLUDED.adjusted_close,
-                        raw_close      = EXCLUDED.raw_close,
-                        ingested_at    = NOW()
-                    """,
-                    insert_rows,
-                )
-        conn.close()
-        print(f"Upserted {len(df)} rows into public.adjusted_price_daily")
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.adjusted_price_daily
+                            (ticker, trading_date, adj_factor, adjusted_close, adjusted_volume, raw_close)
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            adj_factor       = EXCLUDED.adj_factor,
+                            adjusted_close   = EXCLUDED.adjusted_close,
+                            adjusted_volume  = EXCLUDED.adjusted_volume,
+                            raw_close        = EXCLUDED.raw_close,
+                            ingested_at      = NOW()
+                        """,
+                        insert_rows,
+                    )
+            print(f"Upserted {len(df)} rows into public.adjusted_price_daily")
+        finally:
+            conn.close()
 
     # DAG wiring
     tickers = fetch_tickers_with_dividends()

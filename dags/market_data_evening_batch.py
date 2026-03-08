@@ -25,7 +25,7 @@ from etl_modules.notifications import (
 )
 
 # CONFIG
-DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 default_args = {
     "owner": "data_engineer",
@@ -83,17 +83,14 @@ with DAG(
             print("No price data to load.")
             return
 
-        if not DATABASE_URL:
-            raise RuntimeError("DATABASE_URL environment variable is not set")
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
         print(f"Connecting to Supabase/Postgres...")
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(SUPABASE_DB_URL)
 
         price_cols = [
             "trading_date",
-            "open",
-            "high",
-            "low",
             "close",
             "volume",
             "ticker",
@@ -116,36 +113,38 @@ with DAG(
             rows.append(tuple(row.get(col) for col in price_cols))
 
         print(f"Upserting {len(rows)} price rows into market_data_prices...")
-        with conn:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_values(
-                    cur,
-                    """
-                    INSERT INTO public.market_data_prices
-                        (trading_date, open, high, low, close, volume, ticker,
-                         daily_return, ma_50, ma_200, rsi_14, macd, macd_signal,
-                         macd_hist, source)
-                    VALUES %s
-                    ON CONFLICT (ticker, trading_date) DO UPDATE SET
-                        open          = EXCLUDED.open,
-                        high          = EXCLUDED.high,
-                        low           = EXCLUDED.low,
-                        close         = EXCLUDED.close,
-                        volume        = EXCLUDED.volume,
-                        daily_return  = EXCLUDED.daily_return,
-                        ma_50         = EXCLUDED.ma_50,
-                        ma_200        = EXCLUDED.ma_200,
-                        rsi_14        = EXCLUDED.rsi_14,
-                        macd          = EXCLUDED.macd,
-                        macd_signal   = EXCLUDED.macd_signal,
-                        macd_hist     = EXCLUDED.macd_hist,
-                        source        = EXCLUDED.source,
-                        ingested_at   = NOW()
-                    """,
-                    rows,
-                )
-        conn.close()
-        print("Price upsert complete.")
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.market_data_prices
+                            (trading_date, open, high, low, close, volume, ticker,
+                             daily_return, ma_50, ma_200, rsi_14, macd, macd_signal,
+                             macd_hist, source)
+                        VALUES %s
+                        ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            open          = EXCLUDED.open,
+                            high          = EXCLUDED.high,
+                            low           = EXCLUDED.low,
+                            close         = EXCLUDED.close,
+                            volume        = EXCLUDED.volume,
+                            daily_return  = EXCLUDED.daily_return,
+                            ma_50         = EXCLUDED.ma_50,
+                            ma_200        = EXCLUDED.ma_200,
+                            rsi_14        = EXCLUDED.rsi_14,
+                            macd          = EXCLUDED.macd,
+                            macd_signal   = EXCLUDED.macd_signal,
+                            macd_hist     = EXCLUDED.macd_hist,
+                            source        = EXCLUDED.source,
+                            ingested_at   = NOW()
+                        """,
+                        rows,
+                    )
+            print("Price upsert complete.")
+        finally:
+            conn.close()
 
     # --- TASK GROUP 2: RATIOS ---
     @task
@@ -174,10 +173,10 @@ with DAG(
             print("No ratio data to load.")
             return
 
-        if not DATABASE_URL:
-            raise RuntimeError("DATABASE_URL environment variable is not set")
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(SUPABASE_DB_URL)
 
         ratio_cols = [
             "ticker",
@@ -212,40 +211,42 @@ with DAG(
             rows.append(tuple(row.get(col, 0) for col in ratio_cols))
 
         print(f"Upserting {len(rows)} financial ratio rows into market_data_financial_ratios...")
-        with conn:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_values(
-                    cur,
-                    """
-                    INSERT INTO public.market_data_financial_ratios
-                        (ticker, fiscal_date, year, quarter, pe_ratio, pb_ratio,
-                         ps_ratio, p_cashflow_ratio, eps, bvps, market_cap, roe,
-                         roa, roic, financial_leverage, dividend_yield,
-                         net_profit_margin, debt_to_equity)
-                    VALUES %s
-                    ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
-                        year              = EXCLUDED.year,
-                        quarter           = EXCLUDED.quarter,
-                        pe_ratio          = EXCLUDED.pe_ratio,
-                        pb_ratio          = EXCLUDED.pb_ratio,
-                        ps_ratio          = EXCLUDED.ps_ratio,
-                        p_cashflow_ratio  = EXCLUDED.p_cashflow_ratio,
-                        eps               = EXCLUDED.eps,
-                        bvps              = EXCLUDED.bvps,
-                        market_cap        = EXCLUDED.market_cap,
-                        roe               = EXCLUDED.roe,
-                        roa               = EXCLUDED.roa,
-                        roic              = EXCLUDED.roic,
-                        financial_leverage = EXCLUDED.financial_leverage,
-                        dividend_yield    = EXCLUDED.dividend_yield,
-                        net_profit_margin = EXCLUDED.net_profit_margin,
-                        debt_to_equity    = EXCLUDED.debt_to_equity,
-                        ingested_at       = NOW()
-                    """,
-                    rows,
-                )
-        conn.close()
-        print("Financial ratio upsert complete.")
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.market_data_financial_ratios
+                            (ticker, fiscal_date, year, quarter, pe_ratio, pb_ratio,
+                             ps_ratio, p_cashflow_ratio, eps, bvps, market_cap, roe,
+                             roa, roic, financial_leverage, dividend_yield,
+                             net_profit_margin, debt_to_equity)
+                        VALUES %s
+                        ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
+                            year              = EXCLUDED.year,
+                            quarter           = EXCLUDED.quarter,
+                            pe_ratio          = EXCLUDED.pe_ratio,
+                            pb_ratio          = EXCLUDED.pb_ratio,
+                            ps_ratio          = EXCLUDED.ps_ratio,
+                            p_cashflow_ratio  = EXCLUDED.p_cashflow_ratio,
+                            eps               = EXCLUDED.eps,
+                            bvps              = EXCLUDED.bvps,
+                            market_cap        = EXCLUDED.market_cap,
+                            roe               = EXCLUDED.roe,
+                            roa               = EXCLUDED.roa,
+                            roic              = EXCLUDED.roic,
+                            financial_leverage = EXCLUDED.financial_leverage,
+                            dividend_yield    = EXCLUDED.dividend_yield,
+                            net_profit_margin = EXCLUDED.net_profit_margin,
+                            debt_to_equity    = EXCLUDED.debt_to_equity,
+                            ingested_at       = NOW()
+                        """,
+                        rows,
+                    )
+            print("Financial ratio upsert complete.")
+        finally:
+            conn.close()
 
     # --- TASK GROUP 3: FUNDAMENTALS (Dividends & Income Stmt) ---
     @task
@@ -295,101 +296,102 @@ with DAG(
             print("No fundamental data to load.")
             return
 
-        if not DATABASE_URL:
-            raise RuntimeError("DATABASE_URL environment variable is not set")
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(SUPABASE_DB_URL)
 
-        # Load Dividends
-        divs = data.get("dividends", [])
-        if divs:
-            print(f"Upserting {len(divs)} dividend rows into market_data_dividends...")
-            div_cols = [
-                "ticker",
-                "exercise_date",
-                "cash_year",
-                "cash_dividend_percentage",
-                "stock_dividend_percentage",
-                "issue_method",
-            ]
-            div_rows = []
-            for row in divs:
-                if row.get("exercise_date"):
-                    row["exercise_date"] = datetime.strptime(
-                        row["exercise_date"], "%Y-%m-%d"
-                    ).date()
-                div_rows.append(tuple(row.get(col) for col in div_cols))
+        try:
+            # Load Dividends
+            divs = data.get("dividends", [])
+            if divs:
+                print(f"Upserting {len(divs)} dividend rows into market_data_dividends...")
+                div_cols = [
+                    "ticker",
+                    "exercise_date",
+                    "cash_year",
+                    "cash_dividend_percentage",
+                    "stock_dividend_percentage",
+                    "issue_method",
+                ]
+                div_rows = []
+                for row in divs:
+                    if row.get("exercise_date"):
+                        row["exercise_date"] = datetime.strptime(
+                            row["exercise_date"], "%Y-%m-%d"
+                        ).date()
+                    div_rows.append(tuple(row.get(col) for col in div_cols))
 
-            with conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        """
-                        INSERT INTO public.market_data_dividends
-                            (ticker, exercise_date, cash_year,
-                             cash_dividend_percentage, stock_dividend_percentage,
-                             issue_method)
-                        VALUES %s
-                        ON CONFLICT (ticker, exercise_date) DO UPDATE SET
-                            cash_year                   = EXCLUDED.cash_year,
-                            cash_dividend_percentage    = EXCLUDED.cash_dividend_percentage,
-                            stock_dividend_percentage   = EXCLUDED.stock_dividend_percentage,
-                            issue_method                = EXCLUDED.issue_method,
-                            ingested_at                 = NOW()
-                        """,
-                        div_rows,
-                    )
-            print("Dividend upsert complete.")
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO public.market_data_dividends
+                                (ticker, exercise_date, cash_year,
+                                 cash_dividend_percentage, stock_dividend_percentage,
+                                 issue_method)
+                            VALUES %s
+                            ON CONFLICT (ticker, exercise_date) DO UPDATE SET
+                                cash_year                   = EXCLUDED.cash_year,
+                                cash_dividend_percentage    = EXCLUDED.cash_dividend_percentage,
+                                stock_dividend_percentage   = EXCLUDED.stock_dividend_percentage,
+                                issue_method                = EXCLUDED.issue_method,
+                                ingested_at                 = NOW()
+                            """,
+                            div_rows,
+                        )
+                print("Dividend upsert complete.")
 
-        # Load Income Statement
-        income = data.get("income_stmt", [])
-        if income:
-            print(f"Upserting {len(income)} income statement rows into market_data_income_statements...")
-            inc_cols = [
-                "ticker",
-                "fiscal_date",
-                "year",
-                "quarter",
-                "revenue",
-                "cost_of_goods_sold",
-                "gross_profit",
-                "operating_profit",
-                "net_profit_post_tax",
-            ]
-            inc_rows = []
-            for row in income:
-                if row.get("fiscal_date"):
-                    row["fiscal_date"] = datetime.strptime(
-                        row["fiscal_date"], "%Y-%m-%d"
-                    ).date()
-                # Postgres Numeric accepts None (NULL), no need to coerce to 0
-                inc_rows.append(tuple(row.get(col) for col in inc_cols))
+            # Load Income Statement
+            income = data.get("income_stmt", [])
+            if income:
+                print(f"Upserting {len(income)} income statement rows into market_data_income_statements...")
+                inc_cols = [
+                    "ticker",
+                    "fiscal_date",
+                    "year",
+                    "quarter",
+                    "revenue",
+                    "cost_of_goods_sold",
+                    "gross_profit",
+                    "operating_profit",
+                    "net_profit_post_tax",
+                ]
+                inc_rows = []
+                for row in income:
+                    if row.get("fiscal_date"):
+                        row["fiscal_date"] = datetime.strptime(
+                            row["fiscal_date"], "%Y-%m-%d"
+                        ).date()
+                    # Postgres Numeric accepts None (NULL), no need to coerce to 0
+                    inc_rows.append(tuple(row.get(col) for col in inc_cols))
 
-            with conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        """
-                        INSERT INTO public.market_data_income_statements
-                            (ticker, fiscal_date, year, quarter, revenue,
-                             cost_of_goods_sold, gross_profit, operating_profit,
-                             net_profit_post_tax)
-                        VALUES %s
-                        ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
-                            year                = EXCLUDED.year,
-                            quarter             = EXCLUDED.quarter,
-                            revenue             = EXCLUDED.revenue,
-                            cost_of_goods_sold  = EXCLUDED.cost_of_goods_sold,
-                            gross_profit        = EXCLUDED.gross_profit,
-                            operating_profit    = EXCLUDED.operating_profit,
-                            net_profit_post_tax = EXCLUDED.net_profit_post_tax,
-                            ingested_at         = NOW()
-                        """,
-                        inc_rows,
-                    )
-            print("Income statement upsert complete.")
-
-        conn.close()
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO public.market_data_income_statements
+                                (ticker, fiscal_date, year, quarter, revenue,
+                                 cost_of_goods_sold, gross_profit, operating_profit,
+                                 net_profit_post_tax)
+                            VALUES %s
+                            ON CONFLICT (ticker, fiscal_date) DO UPDATE SET
+                                year                = EXCLUDED.year,
+                                quarter             = EXCLUDED.quarter,
+                                revenue             = EXCLUDED.revenue,
+                                cost_of_goods_sold  = EXCLUDED.cost_of_goods_sold,
+                                gross_profit        = EXCLUDED.gross_profit,
+                                operating_profit    = EXCLUDED.operating_profit,
+                                net_profit_post_tax = EXCLUDED.net_profit_post_tax,
+                                ingested_at         = NOW()
+                            """,
+                            inc_rows,
+                        )
+                print("Income statement upsert complete.")
+        finally:
+            conn.close()
 
     # --- ORCHESTRATION WITH PARALLEL TASK GROUPS ---
 

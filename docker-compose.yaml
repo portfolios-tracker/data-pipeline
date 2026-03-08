@@ -68,11 +68,6 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
-    # ClickHouse Connection
-    CLICKHOUSE_HOST: clickhouse-server
-    CLICKHOUSE_PORT: 8123
-    CLICKHOUSE_USER: default
-    CLICKHOUSE_PASSWORD: ""
     # Performance
     NUMBA_CACHE_DIR: /tmp
     # API Keys (loaded from .env)
@@ -82,7 +77,7 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     GEMINI_API_KEY: "${GEMINI_API_KEY}"
     SUPABASE_URL: "${SUPABASE_URL}"
     SUPABASE_SECRET_OR_SERVICE_ROLE_KEY: "${SUPABASE_SECRET_OR_SERVICE_ROLE_KEY}"
-    DATABASE_URL: "${DATABASE_URL}"
+    SUPABASE_DB_URL: "${SUPABASE_DB_URL:-}"
     DATA_PIPELINE_API_KEY: "${DATA_PIPELINE_API_KEY}"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
@@ -96,8 +91,6 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     redis:
       condition: service_healthy
     postgres:
-      condition: service_healthy
-    clickhouse-server:
       condition: service_healthy
 
 services:
@@ -128,30 +121,6 @@ services:
       timeout: 30s
       retries: 50
       start_period: 30s
-    restart: always
-
-  # CLICKHOUSE - Data Warehouse
-  clickhouse-server:
-    image: clickhouse/clickhouse-server:latest
-    ports:
-      - "8123:8123" # HTTP
-      - "9000:9000" # Native
-    environment:
-      - CLICKHOUSE_DB=portfolios_tracker_dw
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     restart: always
 
   # AIRFLOW INIT
@@ -196,17 +165,6 @@ services:
       postgres:
         condition: service_healthy
 
-  # CLICKHOUSE INIT
-  clickhouse-init:
-    <<: *airflow-common
-    command: python /opt/airflow/scripts/init_clickhouse_schema.py
-    restart: on-failure:3
-    depends_on:
-      clickhouse-server:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-
   # AIRFLOW API SERVER
   airflow-apiserver:
     <<: *airflow-common
@@ -224,8 +182,6 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
-      clickhouse-init:
-        condition: service_completed_successfully
 
   # AIRFLOW SCHEDULER
   airflow-scheduler:
@@ -241,8 +197,6 @@ services:
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
-        condition: service_completed_successfully
-      clickhouse-init:
         condition: service_completed_successfully
 
   # AIRFLOW DAG PROCESSOR
@@ -282,8 +236,6 @@ services:
       airflow-apiserver:
         condition: service_healthy
       airflow-init:
-        condition: service_completed_successfully
-      clickhouse-init:
         condition: service_completed_successfully
 
   # AIRFLOW TRIGGERER
@@ -337,4 +289,3 @@ services:
 
 volumes:
   postgres-db-volume:
-  clickhouse-data:
