@@ -3,23 +3,23 @@ import pandas_ta as ta
 import logging
 import os
 import numpy as np
-import clickhouse_connect
+from supabase import create_client
 from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
 from .cache import cached_data
 
 
 # ---------------------------------------------------------------------------
-# Fallback ticker list used when ClickHouse is unreachable during DAG parsing
+# Fallback ticker list used when Supabase is unreachable during DAG parsing
 # ---------------------------------------------------------------------------
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
 def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
     """
-    Return active VN stock tickers from ClickHouse dim_assets.
+    Return active VN stock tickers from the Supabase ``assets`` table.
 
-    Falls back to a hardcoded seed list when ClickHouse is not reachable
+    Falls back to a hardcoded seed list when Supabase is not reachable
     (e.g. during DAG file parsing on Airflow startup).
 
     Parameters
@@ -27,47 +27,50 @@ def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
     raise_on_fallback : bool
         When True, raise a RuntimeError instead of returning the fallback list.
         Set this to True in task execution contexts to prevent silent partial
-        ingestion when ClickHouse is unexpectedly unreachable at runtime.
+        ingestion when Supabase is unexpectedly unreachable at runtime.
     """
     try:
-        client = clickhouse_connect.get_client(
-            host=os.getenv("CLICKHOUSE_HOST", "clickhouse-server"),
-            port=int(os.getenv("CLICKHOUSE_PORT", 8123)),
-            username=os.getenv("CLICKHOUSE_USER", "default"),
-            password=os.getenv("CLICKHOUSE_PASSWORD", ""),
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise ValueError(
+                "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY not set"
+            )
+        client = create_client(url, key)
+        response = (
+            client.table("assets")
+            .select("symbol")
+            .eq("asset_class", "STOCK")
+            .eq("market", "VN")
+            .order("symbol")
+            .execute()
         )
-        result = client.query(
-            "SELECT symbol "
-            "FROM portfolios_tracker_dw.dim_assets FINAL "
-            "WHERE asset_class = 'STOCK' AND market = 'VN' AND is_active = 1 "
-            "ORDER BY symbol"
-        )
-        tickers = [row[0] for row in result.result_rows]
+        tickers = [row["symbol"] for row in response.data if row.get("symbol")]
         if tickers:
-            logging.info(f"Loaded {len(tickers)} active VN tickers from dim_assets")
+            logging.info(f"Loaded {len(tickers)} active VN tickers from assets table")
             return tickers
         # Treat an empty result set as a fallback condition as well
         if raise_on_fallback:
             raise RuntimeError(
-                "ClickHouse dim_assets query returned zero active VN tickers "
-                "for market=VN and asset_class=STOCK (is_active=1). "
+                "Supabase assets query returned zero active VN tickers "
+                "for market=VN and asset_class=STOCK. "
                 "Task will fail so Airflow can retry. "
-                "If this is persistent, check dim_assets contents and filters."
+                "If this is persistent, check assets table contents and filters."
             )
         logging.warning(
-            "ClickHouse dim_assets query returned zero active VN tickers, "
+            "Supabase assets query returned zero active VN tickers, "
             f"falling back to seed list of {len(_FALLBACK_VN_TICKERS)} tickers "
             "(partial ingestion risk)."
         )
     except Exception as e:
         if raise_on_fallback:
             raise RuntimeError(
-                f"Could not load active VN tickers from ClickHouse dim_assets: {e}. "
+                f"Could not load active VN tickers from Supabase assets table: {e}. "
                 "Task will fail so Airflow can retry. "
-                "If this is persistent, check ClickHouse connectivity and the dim_assets table."
+                "If this is persistent, check Supabase connectivity and the assets table."
             ) from e
         logging.error(
-            f"Could not query dim_assets, falling back to seed list of "
+            f"Could not query assets table, falling back to seed list of "
             f"{len(_FALLBACK_VN_TICKERS)} tickers (partial ingestion risk): {e}"
         )
 

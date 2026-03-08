@@ -82,6 +82,7 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     GEMINI_API_KEY: "${GEMINI_API_KEY}"
     SUPABASE_URL: "${SUPABASE_URL}"
     SUPABASE_SECRET_OR_SERVICE_ROLE_KEY: "${SUPABASE_SECRET_OR_SERVICE_ROLE_KEY}"
+    DATABASE_URL: "${DATABASE_URL}"
     DATA_PIPELINE_API_KEY: "${DATA_PIPELINE_API_KEY}"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags

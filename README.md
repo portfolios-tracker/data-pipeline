@@ -88,7 +88,8 @@ Key environment variables in `.env`:
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: For alert notifications.
 - `GEMINI_API_KEY`: For AI-powered news summarization.
 - `DATA_PIPELINE_API_KEY`: Internal authentication for NestJS API calls.
-- `SUPABASE_URL` / `SUPABASE_SECRET_OR_SERVICE_ROLE_KEY`: Application database access.
+- `SUPABASE_URL` / `SUPABASE_SECRET_OR_SERVICE_ROLE_KEY`: Supabase client access (supabase-py, asset lookups).
+- `DATABASE_URL`: Direct Postgres connection string for bulk market data writes (psycopg2). Format: `postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres`.
 
 ## 🔧 Developer Scripts
 
