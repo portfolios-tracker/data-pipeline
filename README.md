@@ -26,8 +26,6 @@ graph LR
 
 - `dags/`: Airflow directed acyclic graphs for all workflows.
 - `dags/etl_modules/`: Shared logic for data fetching and notifications.
-- `scripts/`: Initialization and utility scripts.
-- `sql/`: Reference SQL for market-data schemas and derived summary objects.
 
 ## 🚀 Key Workflows (DAGs)
 
@@ -48,7 +46,6 @@ graph LR
 - **Product objective:** Deliver a curated, AI-powered morning news digest to users via Telegram before the VN market opens (9:15 AM ICT).
 - **Success metrics:** Telegram delivery rate ≥ 99%; news freshness (last 24 h) ≥ 90% of items; Gemini summarisation latency ≤ 10 s.
 - **Dependencies:** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GEMINI_API_KEY` in `.env`.
-- **To deprecate:** Remove legacy warehouse terminology from the remaining news pipeline internals, keep Telegram integration optional, and archive this DAG only if the product direction changes. Open a tracking issue before proceeding.
 
 ## 🛠️ Local Development
 
@@ -90,53 +87,3 @@ Key environment variables in `.env`:
 - `DATA_PIPELINE_API_KEY`: Internal authentication for NestJS API calls.
 - `SUPABASE_URL` / `SUPABASE_SECRET_OR_SERVICE_ROLE_KEY`: Supabase client access (supabase-py, asset lookups).
 - `SUPABASE_DB_URL`: Direct Postgres connection string for bulk market data writes (psycopg2). Format: `postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres`.
-
-## 🔧 Developer Scripts
-
-> ⚠️ **These scripts are for local development and manual data recovery ONLY.** Never run them in production without explicit approval — they perform direct market-data writes that can introduce duplicates or corrupt derived Supabase tables.
-
-### `scripts/_archive/manual_load_data.py` (Archived)
-
-Manually triggers the full ETL cycle (prices, ratios, dividends, income statements, news) for a configurable set of tickers and date range. Intended for:
-
-- **Backfilling** historical data after a missed scheduled run.
-- **Development/debugging** of ETL transformations.
-- **Initial data seeding** in a fresh local environment.
-
-**Usage:**
-
-```bash
-# Backfill a date range
-uv run python scripts/_archive/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31
-
-# Prices only
-uv run python scripts/_archive/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31 --price-only
-
-# Refresh company dimension from vnstock
-uv run python scripts/_archive/manual_load_data.py --yes-really-run --update-companies
-```
-
-**Safe usage boundaries:**
-
-1. Run from a local machine pointing to a **non-production** Supabase project or local Supabase stack.
-2. Always pass `--yes-really-run` (script aborts without it).
-3. Do not point recovery scripts at the production database without an approved rollback plan.
-4. Do not run concurrently with a live Airflow worker processing the same tickers/date range.
-5. The ticker list is hardcoded to `STOCKS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]`; edit the file locally to expand it — do not commit those changes.
-
-### Supabase schema rollout
-
-Create or update the required Supabase schemas and tables with the repository migrations.
-
-Legacy ClickHouse bootstrap artifacts are archived under `scripts/_archive/` and
-`sql/_archive/` for historical reference only and are not part of active rollout.
-
-There is no warehouse migration to run in this repository because no secondary analytical store was provisioned in the active environment. The rollout is to create the new Supabase market-data tables and point the ETL jobs and services at them directly.
-
-### `scripts/validate_dag_registry.py`
-
-CI utility that checks that every DAG defined in `dags/*.py` is documented in this `README.md`. Run locally or in CI to catch registry drift.
-
-```bash
-uv run python scripts/validate_dag_registry.py
-```
