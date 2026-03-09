@@ -31,15 +31,15 @@ graph LR
 
 ## 🚀 Key Workflows (DAGs)
 
-| DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                        |
-| :---------------------------- | :----------------- | :----------------------------------------- | :--------------------------------------------------------------------------------- |
-| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) into Supabase.     |
-| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, ratios, dividends, and income statements.               |
-| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests.     |
-| `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.           |
-| `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                           |
-| `sync_assets_to_postgres`     | Daily (3 AM)       | Epic 9.1 – Asset Sync                      | Transitional DAG retained only until all asset writes happen directly in Supabase. |
-| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Agentic Portfolio Creation – AI Embeddings | Ingests VN company profiles and upserts Gemini embeddings to pgvector.             |
+| DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                      |
+| :---------------------------- | :----------------- | :----------------------------------------- | :------------------------------------------------------------------------------- |
+| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) into Supabase.   |
+| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, ratios, dividends, and income statements.             |
+| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests.   |
+| `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.         |
+| `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                         |
+| `sync_assets_to_postgres`     | Daily (3 AM)       | Epic 9.1 – Asset Sync                      | Deprecated no-op retained temporarily to avoid scheduler churn during migration. |
+| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Agentic Portfolio Creation – AI Embeddings | Ingests VN company profiles and upserts Gemini embeddings to pgvector.           |
 
 ### `market_news_morning` — Scope Decision
 
@@ -95,7 +95,7 @@ Key environment variables in `.env`:
 
 > ⚠️ **These scripts are for local development and manual data recovery ONLY.** Never run them in production without explicit approval — they perform direct market-data writes that can introduce duplicates or corrupt derived Supabase tables.
 
-### `scripts/manual_load_data.py`
+### `scripts/_archive/manual_load_data.py` (Archived)
 
 Manually triggers the full ETL cycle (prices, ratios, dividends, income statements, news) for a configurable set of tickers and date range. Intended for:
 
@@ -107,13 +107,13 @@ Manually triggers the full ETL cycle (prices, ratios, dividends, income statemen
 
 ```bash
 # Backfill a date range
-uv run python scripts/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31
+uv run python scripts/_archive/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31
 
 # Prices only
-uv run python scripts/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31 --price-only
+uv run python scripts/_archive/manual_load_data.py --yes-really-run --start 2024-01-01 --end 2024-01-31 --price-only
 
 # Refresh company dimension from vnstock
-uv run python scripts/manual_load_data.py --yes-really-run --update-companies
+uv run python scripts/_archive/manual_load_data.py --yes-really-run --update-companies
 ```
 
 **Safe usage boundaries:**
@@ -126,7 +126,10 @@ uv run python scripts/manual_load_data.py --yes-really-run --update-companies
 
 ### Supabase schema rollout
 
-Create or update the required Supabase schemas and tables with the repository migrations and verify the reference SQL in `sql/init_schema.sql` stays aligned with the live schema.
+Create or update the required Supabase schemas and tables with the repository migrations.
+
+Legacy ClickHouse bootstrap artifacts are archived under `scripts/_archive/` and
+`sql/_archive/` for historical reference only and are not part of active rollout.
 
 There is no warehouse migration to run in this repository because no secondary analytical store was provisioned in the active environment. The rollout is to create the new Supabase market-data tables and point the ETL jobs and services at them directly.
 

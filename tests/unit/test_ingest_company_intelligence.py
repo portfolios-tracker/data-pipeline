@@ -85,18 +85,22 @@ class TestBatchProcessing:
     """Unit tests for batch processing and rate limiting logic."""
 
     @patch("dags.ingest_company_intelligence.time.sleep")
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_rate_limiting_sleep_called_between_tickers(self, mock_get_ch, mock_sleep):
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_rate_limiting_sleep_called_between_tickers(self, mock_get_supabase, mock_sleep):
         """
         Verifies 0.5s sleep is called after each ticker regardless of success or failure.
         """
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("VNM", "HOSE"), ("HPG", "HOSE"), ("VCB", "HNX")]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[
+                {"symbol": "VNM", "exchange": "HOSE"},
+                {"symbol": "HPG", "exchange": "HOSE"},
+                {"symbol": "VCB", "exchange": "HNX"},
+            ]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -114,17 +118,17 @@ class TestBatchProcessing:
         assert mock_sleep.call_count == 3
         mock_sleep.assert_called_with(0.5)
 
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_skips_ticker_with_empty_overview(self, mock_get_ch):
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_skips_ticker_with_empty_overview(self, mock_get_supabase):
         """Tickers with empty vnstock overview are skipped, not added to profiles."""
         import pandas as pd
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("EMPTY", "HOSE")]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[{"symbol": "EMPTY", "exchange": "HOSE"}]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -141,17 +145,17 @@ class TestBatchProcessing:
         pushed_profiles = mock_ti.xcom_push.call_args[1]["value"]
         assert len(pushed_profiles) == 0
 
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_skips_ticker_with_empty_company_profile_field(self, mock_get_ch):
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_skips_ticker_with_empty_company_profile_field(self, mock_get_supabase):
         """Tickers whose overview row has an empty company_profile string are skipped."""
         import pandas as pd
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("BLANK", "HOSE")]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[{"symbol": "BLANK", "exchange": "HOSE"}]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -175,17 +179,17 @@ class TestBatchProcessing:
 
         assert result == 0
 
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_logs_progress_every_50_tickers(self, mock_get_ch):
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_logs_progress_every_50_tickers(self, mock_get_supabase):
         """Progress is logged at index 49 (50th ticker processed)."""
         import pandas as pd
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [(f"T{i:03d}", "HOSE") for i in range(51)]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[{"symbol": f"T{i:03d}", "exchange": "HOSE"} for i in range(51)]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}

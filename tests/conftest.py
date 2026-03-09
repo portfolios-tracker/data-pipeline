@@ -3,7 +3,6 @@ Pytest configuration and shared fixtures for Portfolios Tracker tests.
 
 This module provides common fixtures used across all tests:
 - Mock environment variables
-- Mock ClickHouse clients
 - Sample DataFrames
 - Mock API responses
 """
@@ -13,7 +12,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -25,10 +24,9 @@ def mock_environment_variables():
     # Store original values
     original_env = {}
     env_vars = {
-        "CLICKHOUSE_HOST": "test-clickhouse",
-        "CLICKHOUSE_PORT": "8123",
-        "CLICKHOUSE_USER": "test_user",
-        "CLICKHOUSE_PASSWORD": "test_password",
+        "SUPABASE_DB_URL": "postgresql://test_user:test_password@localhost:5432/postgres",
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_SECRET_OR_SERVICE_ROLE_KEY": "test-service-role-key",
         "TELEGRAM_BOT_TOKEN": "test_token_123456",
         "TELEGRAM_CHAT_ID": "test_chat_id_789",
         "GEMINI_API_KEY": "test_gemini_key_abc",
@@ -47,27 +45,6 @@ def mock_environment_variables():
             os.environ.pop(key, None)
         else:
             os.environ[key] = original_value
-
-
-@pytest.fixture
-def mock_clickhouse_client():
-    """
-    Provides a mock ClickHouse client for database operations.
-
-    Returns:
-        Mock: A mock client with query() and command() methods
-    """
-    client = MagicMock()
-
-    # Mock successful query results
-    mock_result = Mock()
-    mock_result.result_rows = []
-    mock_result.column_names = []
-
-    client.query.return_value = mock_result
-    client.command.return_value = None
-
-    return client
 
 
 @pytest.fixture

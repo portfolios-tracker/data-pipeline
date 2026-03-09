@@ -108,6 +108,7 @@ def fetch_stock_price(symbol, start_date, end_date):
             columns={"time": "trading_date", "date": "trading_date"}, inplace=True
         )
 
+        # Builder/backtest consumers require close + volume; OHLC is out of scope.
         required_cols = ["trading_date", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
         df["ticker"] = symbol
@@ -386,7 +387,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
 
     The index is treated as a zero-dividend synthetic asset:
     adjusted_close == raw_close (no corporate action adjustment needed).
-    Rows are stored in portfolios_tracker_dw.fact_stock_daily with source='vnstock_index'.
+    Rows are stored in public.market_data_prices with source='vnstock_index'.
 
     Parameters
     ----------
@@ -400,7 +401,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
     Returns
     -------
     pd.DataFrame
-        Columns matching fact_stock_daily schema with close/volume plus
+        Columns matching market_data_prices schema with close/volume plus
         indicator columns set to 0.
     """
     logging.info("Fetching index history for %s (%s → %s)", symbol, start_date, end_date)

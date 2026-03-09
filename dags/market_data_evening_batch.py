@@ -120,14 +120,11 @@ with DAG(
                         cur,
                         """
                         INSERT INTO public.market_data_prices
-                            (trading_date, open, high, low, close, volume, ticker,
+                            (trading_date, close, volume, ticker,
                              daily_return, ma_50, ma_200, rsi_14, macd, macd_signal,
                              macd_hist, source)
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
-                            open          = EXCLUDED.open,
-                            high          = EXCLUDED.high,
-                            low           = EXCLUDED.low,
                             close         = EXCLUDED.close,
                             volume        = EXCLUDED.volume,
                             daily_return  = EXCLUDED.daily_return,

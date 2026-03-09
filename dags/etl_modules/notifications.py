@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 from datetime import datetime
-import clickhouse_connect
+import psycopg2
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,103 +10,124 @@ load_dotenv()
 
 def get_latest_stock_data(tickers):
     """
-    Fetches the latest stock data from ClickHouse views for the given tickers.
+    Fetches latest stock data and nearest fundamental snapshot from Supabase
+    Postgres tables for the given tickers.
+
+    Equivalent coverage to the former ClickHouse views:
+    - market_data_prices: latest daily close/volume + technical indicators
+    - market_data_financial_ratios: latest fiscal snapshot as-of trading_date
+    - assets: sector/industry metadata
     Returns a dictionary with ticker as key and technical/fundamental data as value.
     """
-    clickhouse_host = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
-    clickhouse_port = int(os.getenv("CLICKHOUSE_PORT", 8123))
-    clickhouse_user = os.getenv("CLICKHOUSE_USER", "default")
-    clickhouse_password = os.getenv("CLICKHOUSE_PASSWORD", "")
+    if not tickers:
+        return {}
+
+    db_url = os.getenv("SUPABASE_DB_URL")
+    if not db_url:
+        logging.error("SUPABASE_DB_URL is not set; cannot fetch stock context")
+        return {}
 
     try:
-        client = clickhouse_connect.get_client(
-            host=clickhouse_host,
-            port=clickhouse_port,
-            username=clickhouse_user,
-            password=clickhouse_password,
-        )
+        with psycopg2.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest_price AS (
+                        SELECT DISTINCT ON (p.ticker)
+                            p.ticker,
+                            p.trading_date,
+                            p.close,
+                            p.volume,
+                            p.daily_return,
+                            p.ma_50,
+                            p.ma_200,
+                            p.rsi_14,
+                            p.macd,
+                            p.macd_signal,
+                            p.macd_hist
+                        FROM public.market_data_prices p
+                        WHERE p.ticker = ANY(%s)
+                        ORDER BY p.ticker, p.trading_date DESC
+                    )
+                    SELECT
+                        lp.ticker,
+                        lp.trading_date::text,
+                        lp.close,
+                        lp.volume,
+                        lp.daily_return,
+                        lp.ma_50,
+                        lp.ma_200,
+                        lp.rsi_14,
+                        lp.macd,
+                        lp.macd_signal,
+                        lp.macd_hist,
+                        CASE
+                            WHEN p20.close IS NULL OR p20.close = 0 THEN 0
+                            ELSE ((lp.close - p20.close) / p20.close) * 100
+                        END AS return_1m,
+                        COALESCE(a.sector, 'N/A') AS sector,
+                        COALESCE(a.industry, 'N/A') AS industry,
+                        COALESCE(r.pe_ratio, CASE WHEN COALESCE(r.eps, 0) = 0 THEN 0 ELSE (lp.close * 1000) / r.eps END, 0) AS pe_ratio,
+                        COALESCE(r.roe, 0) AS roe,
+                        COALESCE(r.roic, 0) AS roic,
+                        COALESCE(r.debt_to_equity, 0) AS debt_to_equity,
+                        COALESCE(r.net_profit_margin, 0) AS net_profit_margin,
+                        COALESCE(r.eps, 0) AS eps
+                    FROM latest_price lp
+                    LEFT JOIN LATERAL (
+                        SELECT p2.close
+                        FROM public.market_data_prices p2
+                        WHERE p2.ticker = lp.ticker
+                          AND p2.trading_date < lp.trading_date
+                        ORDER BY p2.trading_date DESC
+                        OFFSET 19 LIMIT 1
+                    ) p20 ON TRUE
+                    LEFT JOIN public.assets a
+                      ON a.symbol = lp.ticker
+                     AND a.asset_class = 'STOCK'
+                     AND a.market = 'VN'
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            fr.pe_ratio,
+                            fr.roe,
+                            fr.roic,
+                            fr.debt_to_equity,
+                            fr.net_profit_margin,
+                            fr.eps
+                        FROM public.market_data_financial_ratios fr
+                        WHERE fr.ticker = lp.ticker
+                          AND fr.fiscal_date <= lp.trading_date
+                        ORDER BY fr.fiscal_date DESC
+                        LIMIT 1
+                    ) r ON TRUE
+                    """,
+                    (tickers,),
+                )
+                rows = cur.fetchall()
 
         stock_data = {}
-
-        for ticker in tickers:
-            # Get latest market data with technical indicators
-            market_query = """
-            SELECT 
-                ticker,
-                trading_date,
-                close,
-                volume,
-                daily_return,
-                ma_50,
-                ma_200,
-                rsi_14,
-                macd,
-                macd_signal,
-                macd_hist,
-                return_1m,
-                sector,
-                industry
-            FROM portfolios_tracker_dw.view_market_daily_master
-            WHERE ticker = {ticker:String}
-            ORDER BY trading_date DESC
-            LIMIT 1
-            """
-
-            market_result = client.query(market_query, parameters={"ticker": ticker})
-
-            if market_result.result_rows:
-                row = market_result.result_rows[0]
-                stock_data[ticker] = {
-                    "trading_date": str(row[1]),
-                    "close": float(row[2]),
-                    "volume": int(row[3]),
-                    "daily_return": float(row[4]),
-                    "ma_50": float(row[5]),
-                    "ma_200": float(row[6]),
-                    "rsi_14": float(row[7]),
-                    "macd": float(row[8]),
-                    "macd_signal": float(row[9]),
-                    "macd_hist": float(row[10]),
-                    "return_1m": float(row[11]) if row[11] is not None else 0,
-                    "sector": str(row[12]) if row[12] else "N/A",
-                    "industry": str(row[13]) if row[13] else "N/A",
-                }
-
-                # Get latest valuation data
-                valuation_query = """
-                SELECT 
-                    daily_pe_ratio,
-                    roe,
-                    roic,
-                    debt_to_equity,
-                    net_profit_margin,
-                    eps
-                FROM portfolios_tracker_dw.view_valuation_daily
-                WHERE ticker = {ticker:String}
-                ORDER BY trading_date DESC
-                LIMIT 1
-                """
-
-                val_result = client.query(valuation_query, parameters={"ticker": ticker})
-
-                if val_result.result_rows:
-                    val_row = val_result.result_rows[0]
-                    stock_data[ticker].update(
-                        {
-                            "pe_ratio": float(val_row[0])
-                            if val_row[0] is not None
-                            else 0,
-                            "roe": float(val_row[1]) if val_row[1] is not None else 0,
-                            "roic": float(val_row[2]) if val_row[2] is not None else 0,
-                            "debt_to_equity": float(val_row[3])
-                            if val_row[3] is not None
-                            else 0,
-                            "net_profit_margin": float(val_row[4])
-                            if val_row[4] is not None
-                            else 0,
-                            "eps": float(val_row[5]) if val_row[5] is not None else 0,
-                        }
-                    )
+        for row in rows:
+            stock_data[row[0]] = {
+                "trading_date": str(row[1]),
+                "close": float(row[2]) if row[2] is not None else 0.0,
+                "volume": int(row[3]) if row[3] is not None else 0,
+                "daily_return": float(row[4]) if row[4] is not None else 0.0,
+                "ma_50": float(row[5]) if row[5] is not None else 0.0,
+                "ma_200": float(row[6]) if row[6] is not None else 0.0,
+                "rsi_14": float(row[7]) if row[7] is not None else 0.0,
+                "macd": float(row[8]) if row[8] is not None else 0.0,
+                "macd_signal": float(row[9]) if row[9] is not None else 0.0,
+                "macd_hist": float(row[10]) if row[10] is not None else 0.0,
+                "return_1m": float(row[11]) if row[11] is not None else 0.0,
+                "sector": str(row[12]) if row[12] else "N/A",
+                "industry": str(row[13]) if row[13] else "N/A",
+                "pe_ratio": float(row[14]) if row[14] is not None else 0.0,
+                "roe": float(row[15]) if row[15] is not None else 0.0,
+                "roic": float(row[16]) if row[16] is not None else 0.0,
+                "debt_to_equity": float(row[17]) if row[17] is not None else 0.0,
+                "net_profit_margin": float(row[18]) if row[18] is not None else 0.0,
+                "eps": float(row[19]) if row[19] is not None else 0.0,
+            }
 
         return stock_data
 

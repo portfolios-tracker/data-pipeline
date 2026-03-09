@@ -15,12 +15,12 @@ Schedule: Weekly (Sunday 2 AM)
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import clickhouse_connect
 import pandas as pd
 import os
 import logging
 from io import StringIO
-# ... (existing imports preserved implicitly via context, but I will just update the specific lines)
+import psycopg2
+import psycopg2.extras
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,14 +43,114 @@ dag = DAG(
 )
 
 
-def get_clickhouse_client():
-    """Create ClickHouse client with environment configuration"""
-    return clickhouse_connect.get_client(
-        host=os.getenv("CLICKHOUSE_HOST", "clickhouse-server"),
-        port=int(os.getenv("CLICKHOUSE_PORT", 8123)),
-        username=os.getenv("CLICKHOUSE_USER", "default"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-    )
+def _get_conn():
+    db_url = os.getenv("SUPABASE_DB_URL")
+    if not db_url:
+        raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
+    return psycopg2.connect(db_url)
+
+
+def upsert_assets_records(records: list[dict]) -> int:
+    """Upsert asset records directly into public.assets using Supabase Postgres."""
+    if not records:
+        return 0
+
+    cols = [
+        "symbol",
+        "name_en",
+        "name_local",
+        "asset_class",
+        "market",
+        "currency",
+        "exchange",
+        "sector",
+        "industry",
+        "logo_url",
+        "metadata",
+        "source",
+    ]
+
+    def _map_row(rec: dict) -> tuple:
+        market = rec.get("market")
+        return (
+            rec.get("symbol"),
+            rec.get("name_en") or "",
+            rec.get("name_local") or None,
+            rec.get("asset_class"),
+            market if market else None,
+            rec.get("currency") or "",
+            rec.get("exchange") or None,
+            rec.get("sector") or None,
+            rec.get("industry") or None,
+            rec.get("logo_url") or None,
+            psycopg2.extras.Json(
+                rec.get("external_api_metadata") or rec.get("metadata") or {}
+            ),
+            rec.get("source") or None,
+        )
+
+    rows_with_market = []
+    rows_without_market = []
+    for rec in records:
+        mapped = _map_row(rec)
+        if mapped[4] is None:
+            rows_without_market.append(mapped)
+        else:
+            rows_with_market.append(mapped)
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            if rows_with_market:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO public.assets
+                        (symbol, name_en, name_local, asset_class, market, currency,
+                         exchange, sector, industry, logo_url, metadata, source)
+                    VALUES %s
+                    ON CONFLICT (symbol, market, asset_class)
+                    WHERE market IS NOT NULL
+                    DO UPDATE SET
+                        name_en = EXCLUDED.name_en,
+                        name_local = EXCLUDED.name_local,
+                        currency = EXCLUDED.currency,
+                        exchange = EXCLUDED.exchange,
+                        sector = EXCLUDED.sector,
+                        industry = EXCLUDED.industry,
+                        logo_url = EXCLUDED.logo_url,
+                        metadata = EXCLUDED.metadata,
+                        source = EXCLUDED.source,
+                        updated_at = NOW()
+                    """,
+                    rows_with_market,
+                )
+
+            if rows_without_market:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO public.assets
+                        (symbol, name_en, name_local, asset_class, market, currency,
+                         exchange, sector, industry, logo_url, metadata, source)
+                    VALUES %s
+                    ON CONFLICT (symbol, asset_class)
+                    WHERE market IS NULL
+                    DO UPDATE SET
+                        name_en = EXCLUDED.name_en,
+                        name_local = EXCLUDED.name_local,
+                        currency = EXCLUDED.currency,
+                        exchange = EXCLUDED.exchange,
+                        sector = EXCLUDED.sector,
+                        industry = EXCLUDED.industry,
+                        logo_url = EXCLUDED.logo_url,
+                        metadata = EXCLUDED.metadata,
+                        source = EXCLUDED.source,
+                        updated_at = NOW()
+                    """,
+                    rows_without_market,
+                )
+
+    return len(records)
 
 
 def fetch_vn_stocks(**context):
@@ -60,7 +160,6 @@ def fetch_vn_stocks(**context):
     """
     from vnstock import Listing
 
-    client = get_clickhouse_client()
     listing = Listing(source="VCI")
 
     logger.info("Fetching VN stock list from vnstock...")
@@ -122,12 +221,9 @@ def fetch_vn_stocks(**context):
             }
         )
 
-    df_ch = pd.DataFrame(records)
-
-    client.insert_df("portfolios_tracker_dw.dim_assets", df_ch)
-
-    logger.info(f"✅ Inserted {len(df_ch)} VN stocks (asset_class=STOCK, market=VN)")
-    return len(df_ch)
+    upserted = upsert_assets_records(records)
+    logger.info(f"✅ Upserted {upserted} VN stocks (asset_class=STOCK, market=VN)")
+    return upserted
 
 
 def fetch_us_stocks(**context):
@@ -136,8 +232,6 @@ def fetch_us_stocks(**context):
     → asset_class = 'STOCK', market = 'US'
     """
     import yfinance as yf
-
-    client = get_clickhouse_client()
 
     logger.info("Fetching S&P 500 constituents from Wikipedia...")
 
@@ -217,12 +311,9 @@ def fetch_us_stocks(**context):
             }
         )
 
-    df_ch = pd.DataFrame(records)
-
-    client.insert_df("portfolios_tracker_dw.dim_assets", df_ch)
-
-    logger.info(f"✅ Inserted {len(df_ch)} US stocks (asset_class=STOCK, market=US)")
-    return len(df_ch)
+    upserted = upsert_assets_records(records)
+    logger.info(f"✅ Upserted {upserted} US stocks (asset_class=STOCK, market=US)")
+    return upserted
 
 
 def fetch_crypto(**context):
@@ -234,7 +325,6 @@ def fetch_crypto(**context):
     from pycoingecko import CoinGeckoAPI
     import time
 
-    client = get_clickhouse_client()
     cg = CoinGeckoAPI()
 
     logger.info("Fetching top 500 crypto from CoinGecko...")
@@ -298,12 +388,9 @@ def fetch_crypto(**context):
             }
         )
 
-    df = pd.DataFrame(records)
-
-    client.insert_df("portfolios_tracker_dw.dim_assets", df)
-
-    logger.info(f"✅ Inserted {len(df)} crypto (asset_class=CRYPTO)")
-    return len(df)
+    upserted = upsert_assets_records(records)
+    logger.info(f"✅ Upserted {upserted} crypto (asset_class=CRYPTO)")
+    return upserted
 
 
 def fetch_precious_metals(**context):
@@ -318,8 +405,6 @@ def fetch_precious_metals(**context):
     metals independently from stocks/crypto.
     """
     import yfinance as yf
-
-    client = get_clickhouse_client()
 
     metals_mapping = [
         {
@@ -380,11 +465,9 @@ def fetch_precious_metals(**context):
             }
         )
 
-    df = pd.DataFrame(records)
-    client.insert_df("portfolios_tracker_dw.dim_assets", df)
-
-    logger.info(f"Inserted {len(df)} precious metals (asset_class=COMMODITY)")
-    return len(df)
+    upserted = upsert_assets_records(records)
+    logger.info(f"Upserted {upserted} precious metals (asset_class=COMMODITY)")
+    return upserted
 
 
 # Define tasks

@@ -6,7 +6,7 @@ Tests cover:
 - send_success_notification: Success callback wrapper
 - send_failure_notification: Failure callback wrapper
 - send_telegram_news_summary: News digest with AI summary
-- get_latest_stock_data: ClickHouse data retrieval
+- get_latest_stock_data: Supabase Postgres data retrieval
 - summarize_news_with_gemini: AI summary generation
 """
 
@@ -266,15 +266,14 @@ class TestSendTelegramNewsSummary:
 class TestGetLatestStockData:
     """Test suite for get_latest_stock_data function."""
 
-    @patch("dags.etl_modules.notifications.clickhouse_connect.get_client")
-    def test_successful_data_fetch(self, mock_get_client, mock_environment_variables):
-        """Test successful fetching of stock data from ClickHouse."""
-        # Setup mock client
-        mock_client = MagicMock()
-
-        # Mock market data query
-        mock_market_result = Mock()
-        mock_market_result.result_rows = [
+    @patch("dags.etl_modules.notifications.psycopg2.connect")
+    def test_successful_data_fetch(self, mock_connect, mock_environment_variables):
+        """Test successful fetching of stock data from Supabase Postgres."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_connect.return_value.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [
             (
                 "HPG",
                 "2024-12-22",
@@ -290,15 +289,14 @@ class TestGetLatestStockData:
                 8.5,
                 "Steel",
                 "Basic Materials",
+                15.5,
+                18.5,
+                12.5,
+                0.5,
+                10.2,
+                5000,
             )
         ]
-
-        # Mock valuation query
-        mock_val_result = Mock()
-        mock_val_result.result_rows = [(15.5, 18.5, 12.5, 0.5, 10.2, 5000)]
-
-        mock_client.query.side_effect = [mock_market_result, mock_val_result]
-        mock_get_client.return_value = mock_client
 
         # Execute
         result = get_latest_stock_data(["HPG"])
@@ -310,25 +308,25 @@ class TestGetLatestStockData:
         assert result["HPG"]["pe_ratio"] == 15.5
         assert result["HPG"]["sector"] == "Steel"
 
-    @patch("dags.etl_modules.notifications.clickhouse_connect.get_client")
-    def test_empty_result_handled(self, mock_get_client, mock_environment_variables):
+    @patch("dags.etl_modules.notifications.psycopg2.connect")
+    def test_empty_result_handled(self, mock_connect, mock_environment_variables):
         """Test handling of empty query results."""
-        mock_client = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = []
-        mock_client.query.return_value = mock_result
-        mock_get_client.return_value = mock_client
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_connect.return_value.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
 
         result = get_latest_stock_data(["INVALID"])
 
         assert result == {}
 
-    @patch("dags.etl_modules.notifications.clickhouse_connect.get_client")
+    @patch("dags.etl_modules.notifications.psycopg2.connect")
     def test_connection_error_handled(
-        self, mock_get_client, mock_environment_variables
+        self, mock_connect, mock_environment_variables
     ):
         """Test that connection errors are handled gracefully."""
-        mock_get_client.side_effect = Exception("Connection failed")
+        mock_connect.side_effect = Exception("Connection failed")
 
         result = get_latest_stock_data(["HPG"])
 

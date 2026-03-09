@@ -5,7 +5,6 @@ Tests the full pipeline flow with mocked external services:
 - Mocked vnstock Company API
 - Mocked Gemini Embeddings API
 - Mocked Supabase upsert
-- Mocked ClickHouse client
 
 These tests validate the end-to-end data flow without calling real external APIs.
 """
@@ -50,16 +49,19 @@ class TestFetchCompanyProfilesIntegration:
     """Integration tests for the fetch_company_profiles task."""
 
     @patch("dags.ingest_company_intelligence.time.sleep")
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_fetches_profiles_for_active_vn_tickers(self, mock_get_ch, mock_sleep):
-        """Full flow: ClickHouse query → vnstock overview → XCom push."""
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_fetches_profiles_for_active_vn_tickers(self, mock_get_supabase, mock_sleep):
+        """Full flow: Supabase assets query → vnstock overview → XCom push."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("VNM", "HOSE"), ("HPG", "HOSE")]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[
+                {"symbol": "VNM", "exchange": "HOSE"},
+                {"symbol": "HPG", "exchange": "HOSE"},
+            ]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -109,16 +111,19 @@ class TestFetchCompanyProfilesIntegration:
         assert "HPG" in symbols
 
     @patch("dags.ingest_company_intelligence.time.sleep")
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_handles_vnstock_api_failure_gracefully(self, mock_get_ch, mock_sleep):
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_handles_vnstock_api_failure_gracefully(self, mock_get_supabase, mock_sleep):
         """API failures for individual tickers do not abort the pipeline."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("FAIL", "HOSE"), ("VNM", "HOSE")]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+            data=[
+                {"symbol": "FAIL", "exchange": "HOSE"},
+                {"symbol": "VNM", "exchange": "HOSE"},
+            ]
+        )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -151,16 +156,15 @@ class TestFetchCompanyProfilesIntegration:
         assert pushed[0]["ticker_symbol"] == "VNM"
 
     @patch("dags.ingest_company_intelligence.time.sleep")
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_correct_clickhouse_query_filters_vn_stocks(self, mock_get_ch, mock_sleep):
-        """Verifies the correct SQL filters are applied when querying ClickHouse."""
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    def test_correct_supabase_query_filters_vn_stocks(self, mock_get_supabase, mock_sleep):
+        """Verifies the correct Supabase filters are applied when querying assets."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = []
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        builder = mock_supabase.table.return_value.select.return_value
+        builder.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(data=[])
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
@@ -168,10 +172,10 @@ class TestFetchCompanyProfilesIntegration:
         with patch("dags.ingest_company_intelligence.Company"):
             fetch_company_profiles(**context)
 
-        query_str = mock_ch.query.call_args[0][0]
-        assert "asset_class = 'STOCK'" in query_str
-        assert "market = 'VN'" in query_str
-        assert "is_active = 1" in query_str
+        eq_calls = builder.eq.call_args_list
+        nested_eq_calls = builder.eq.return_value.eq.call_args_list
+        assert any(c.args == ("asset_class", "STOCK") for c in eq_calls)
+        assert any(c.args == ("market", "VN") for c in nested_eq_calls)
 
 
 @pytest.mark.integration
@@ -326,33 +330,20 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
 
 @pytest.mark.integration
 class TestBackfillDimAssetsDescriptionIntegration:
-    """Integration tests for the bonus backfill_dim_assets_description task."""
+    """Integration tests for the legacy no-op backfill task."""
 
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_only_updates_tickers_with_empty_description(self, mock_get_ch):
-        """Only tickers with empty description in dim_assets are backfilled."""
+    def test_backfill_is_noop_even_with_profiles(self):
+        """Backfill is intentionally disabled after Supabase migration."""
         from dags.ingest_company_intelligence import backfill_dim_assets_description
-
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("VNM",)]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
 
         mock_ti = MagicMock()
         mock_ti.xcom_pull.return_value = SAMPLE_PROFILES
         context = {"ti": mock_ti}
 
         result = backfill_dim_assets_description(**context)
+        assert result == 0
 
-        assert result == 1
-        calls_with_symbol = [
-            call for call in mock_ch.command.call_args_list if "VNM" in str(call)
-        ]
-        assert len(calls_with_symbol) == 1
-
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_skips_backfill_when_no_profiles_available(self, mock_get_ch):
+    def test_skips_backfill_when_no_profiles_available(self):
         """If no profiles in XCom, backfill is skipped and returns 0."""
         from dags.ingest_company_intelligence import backfill_dim_assets_description
 
@@ -363,26 +354,3 @@ class TestBackfillDimAssetsDescriptionIntegration:
         result = backfill_dim_assets_description(**context)
 
         assert result == 0
-        mock_get_ch.assert_not_called()
-
-    @patch("dags.ingest_company_intelligence.get_clickhouse_client")
-    def test_optimize_called_after_backfill(self, mock_get_ch):
-        """OPTIMIZE TABLE is called after updating descriptions."""
-        from dags.ingest_company_intelligence import backfill_dim_assets_description
-
-        mock_ch = MagicMock()
-        mock_result = Mock()
-        mock_result.result_rows = [("VNM",)]
-        mock_ch.query.return_value = mock_result
-        mock_get_ch.return_value = mock_ch
-
-        mock_ti = MagicMock()
-        mock_ti.xcom_pull.return_value = [SAMPLE_PROFILES[0]]
-        context = {"ti": mock_ti}
-
-        backfill_dim_assets_description(**context)
-
-        optimize_calls = [
-            call for call in mock_ch.command.call_args_list if "OPTIMIZE" in str(call)
-        ]
-        assert len(optimize_calls) == 1

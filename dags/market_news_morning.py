@@ -3,7 +3,8 @@ from airflow.sdk import task
 from datetime import datetime, timedelta
 from pendulum import timezone
 import pandas as pd
-import clickhouse_connect
+import psycopg2
+import psycopg2.extras
 import os
 import sys
 
@@ -17,11 +18,7 @@ from etl_modules.notifications import (
     send_telegram_news_summary,
 )
 
-# CONFIG
-CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse-server")
-CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", 8123))
-CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
-CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 default_args = {
     "owner": "data_engineer",
@@ -38,7 +35,7 @@ with DAG(
     schedule="0 7 * * 1-5",  # 7 AM Vietnam Time Mon-Fri
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
-    tags=["news", "clickhouse", "morning-brief"],
+    tags=["news", "supabase", "morning-brief"],
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
@@ -68,13 +65,11 @@ with DAG(
             print("No news data to load.")
             return
 
-        print(f"Connecting to ClickHouse at {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}...")
-        client = clickhouse_connect.get_client(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            username=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASSWORD,
-        )
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
+
+        print("Connecting to Supabase/Postgres...")
+        conn = psycopg2.connect(SUPABASE_DB_URL)
 
         print(f"Inserting {len(data)} news rows...")
         cols = [
@@ -100,7 +95,32 @@ with DAG(
                     pass
             tuples.append([row.get(c) for c in cols])
 
-        client.insert("portfolios_tracker_dw.fact_news", tuples, column_names=cols)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO public.market_data_news
+                            (ticker, publish_date, title, source, price_at_publish,
+                             price_change, price_change_ratio, rsi, rs, news_id)
+                        VALUES %s
+                        ON CONFLICT (ticker, news_id) DO UPDATE SET
+                            publish_date = EXCLUDED.publish_date,
+                            title = EXCLUDED.title,
+                            source = EXCLUDED.source,
+                            price_at_publish = EXCLUDED.price_at_publish,
+                            price_change = EXCLUDED.price_change,
+                            price_change_ratio = EXCLUDED.price_change_ratio,
+                            rsi = EXCLUDED.rsi,
+                            rs = EXCLUDED.rs,
+                            ingested_at = NOW()
+                        """,
+                        tuples,
+                    )
+        finally:
+            conn.close()
+
         print("News insertion complete.")
 
     @task

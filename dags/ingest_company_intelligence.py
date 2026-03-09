@@ -5,8 +5,6 @@ Story: 1-2-semantic-knowledge-ingestion-airflow-and-supabase
 Fetches VN company profiles from vnstock (VCI source), generates 768-dimensional
 embeddings via Gemini text-embedding-004, and upserts to Supabase pgvector.
 
-Bonus: Backfills empty description field in ClickHouse dim_assets.
-
 Schedule: Weekly Sunday 4 AM (after assets_dimension_etl at 2 AM)
 """
 
@@ -15,7 +13,6 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-import clickhouse_connect
 import google.generativeai as genai
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
@@ -42,17 +39,6 @@ dag = DAG(
     catchup=False,
     tags=["ai", "embeddings", "company", "supabase", "pgvector"],
 )
-
-
-def get_clickhouse_client():
-    """Create ClickHouse client with environment configuration."""
-    return clickhouse_connect.get_client(
-        host=os.getenv("CLICKHOUSE_HOST", "clickhouse-server"),
-        port=int(os.getenv("CLICKHOUSE_PORT", 8123)),
-        username=os.getenv("CLICKHOUSE_USER", "default"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-    )
-
 
 def get_supabase_client() -> Client:
     """Create Supabase client with environment configuration."""
@@ -81,26 +67,23 @@ def build_embedding_text(
 
 def fetch_company_profiles(**context):
     """
-    Task 1: Query active VN tickers from ClickHouse and fetch company profiles via vnstock.
+    Task 1: Query active VN tickers from Supabase assets and fetch company profiles via vnstock.
 
     - Rate limited: 0.5s sleep between API calls
     - Logs progress every 50 tickers
     - Skips tickers where vnstock returns no data
     """
-    ch_client = get_clickhouse_client()
-
-    query = """
-    SELECT symbol, exchange
-    FROM portfolios_tracker_dw.dim_assets
-    WHERE asset_class = 'STOCK'
-      AND market = 'VN'
-      AND is_active = 1
-    ORDER BY symbol
-    """
-
-    logger.info("Querying active VN tickers from ClickHouse...")
-    result = ch_client.query(query)
-    tickers = [(row[0], row[1]) for row in result.result_rows]
+    supabase = get_supabase_client()
+    logger.info("Querying active VN tickers from Supabase assets...")
+    response = (
+        supabase.table("assets")
+        .select("symbol,exchange")
+        .eq("asset_class", "STOCK")
+        .eq("market", "VN")
+        .order("symbol")
+        .execute()
+    )
+    tickers = [(row.get("symbol"), row.get("exchange") or "") for row in response.data if row.get("symbol")]
     logger.info(f"Found {len(tickers)} active VN tickers")
 
     profiles = []
@@ -249,70 +232,13 @@ def generate_and_upsert_embeddings(**context):
 
 def backfill_dim_assets_description(**context):
     """
-    Task 4 (Bonus): Backfill empty description field in ClickHouse dim_assets.
+    Legacy task retained for DAG compatibility.
 
-    During the same DAG run, update tickers whose dim_assets.description is empty
-    with the company_profile text fetched from vnstock.
-
-    Uses ReplacingMergeTree-compatible insert with OPTIMIZE to deduplicate.
+    The Supabase ``assets`` table does not store a ``description`` column, so
+    there is no equivalent backfill action after ClickHouse retirement.
     """
-    profiles = context["ti"].xcom_pull(
-        key="profiles", task_ids="fetch_company_profiles"
-    )
-
-    if not profiles:
-        logger.info("No profiles available for backfill, skipping")
-        return 0
-
-    ch_client = get_clickhouse_client()
-
-    query = """
-    SELECT symbol
-    FROM portfolios_tracker_dw.dim_assets
-    WHERE asset_class = 'STOCK'
-      AND market = 'VN'
-      AND is_active = 1
-      AND (description = '' OR description IS NULL)
-    """
-
-    result = ch_client.query(query)
-    empty_desc_symbols = {row[0] for row in result.result_rows}
-
-    logger.info(
-        f"Found {len(empty_desc_symbols)} tickers with empty description in dim_assets"
-    )
-
-    backfill_count = 0
-
-    for profile in profiles:
-        symbol = profile["ticker_symbol"]
-        if symbol not in empty_desc_symbols:
-            continue
-
-        company_profile = profile["company_profile"]
-        if not company_profile:
-            continue
-
-        try:
-            ch_client.command(
-                "ALTER TABLE portfolios_tracker_dw.dim_assets UPDATE description = {desc:String} "
-                "WHERE symbol = {symbol:String} AND market = 'VN' AND asset_class = 'STOCK'",
-                parameters={"desc": company_profile, "symbol": symbol},
-            )
-            backfill_count += 1
-        except Exception as e:
-            logger.warning(f"Failed to backfill description for {symbol}: {e}")
-
-    logger.info(f"Backfilled description for {backfill_count} tickers in dim_assets")
-
-    if backfill_count > 0:
-        try:
-            ch_client.command("OPTIMIZE TABLE portfolios_tracker_dw.dim_assets FINAL")
-            logger.info("OPTIMIZE TABLE dim_assets FINAL completed")
-        except Exception as e:
-            logger.warning(f"OPTIMIZE TABLE failed (non-fatal): {e}")
-
-    return backfill_count
+    logger.info("Skipping legacy description backfill: no description column in Supabase assets")
+    return 0
 
 
 task_fetch_profiles = PythonOperator(

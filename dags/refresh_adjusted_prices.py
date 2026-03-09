@@ -91,6 +91,9 @@ with DAG(
         Fetch VNINDEX history and upsert into market_data_prices so that
         refresh_adjusted_prices can also store an adjusted entry for it
         (treated as a zero-dividend index: adj_factor = 1.0).
+
+        The builder uses close+volume and derived indicators; OHLC columns are
+        intentionally excluded from the Supabase schema contract.
         """
         conn = _get_conn()
         try:
@@ -107,9 +110,6 @@ with DAG(
             cols = [
                 "ticker",
                 "trading_date",
-                "open",
-                "high",
-                "low",
                 "close",
                 "volume",
                 "ma_50",
@@ -126,6 +126,11 @@ with DAG(
 
             rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
             present_cols = [c for c in cols if c in df.columns]
+            updatable_cols = [c for c in present_cols if c not in {"ticker", "trading_date"}]
+            conflict_set_sql = ",\n                            ".join(
+                [f"{col} = EXCLUDED.{col}" for col in updatable_cols]
+                + ["ingested_at = NOW()"]
+            )
 
             with conn:
                 with conn.cursor() as cur:
@@ -136,20 +141,7 @@ with DAG(
                             ({", ".join(present_cols)})
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
-                            open        = EXCLUDED.open,
-                            high        = EXCLUDED.high,
-                            low         = EXCLUDED.low,
-                            close       = EXCLUDED.close,
-                            volume      = EXCLUDED.volume,
-                            ma_50       = EXCLUDED.ma_50,
-                            ma_200      = EXCLUDED.ma_200,
-                            rsi_14      = EXCLUDED.rsi_14,
-                            daily_return = EXCLUDED.daily_return,
-                            macd        = EXCLUDED.macd,
-                            macd_signal = EXCLUDED.macd_signal,
-                            macd_hist   = EXCLUDED.macd_hist,
-                            source      = EXCLUDED.source,
-                            ingested_at = NOW()
+                            {conflict_set_sql}
                         """,
                         rows,
                     )

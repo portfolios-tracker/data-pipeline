@@ -8,7 +8,6 @@ Tests cover:
 
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import pytest
 
 
@@ -16,15 +15,12 @@ import pytest
 class TestFetchPreciousMetals:
     """Unit tests for fetch_precious_metals task."""
 
-    @patch("dags.assets_dimension_etl.get_clickhouse_client")
+    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("yfinance.Ticker")
     def test_inserts_xau_xag_with_commodity_class(
-        self, mock_yf_ticker, mock_get_client
+        self, mock_yf_ticker, mock_upsert_assets
     ):
         from dags.assets_dimension_etl import fetch_precious_metals
-
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
 
         # Return predictable metadata for both provider symbols.
         def make_ticker(symbol):
@@ -36,63 +32,53 @@ class TestFetchPreciousMetals:
             return ticker
 
         mock_yf_ticker.side_effect = make_ticker
+        captured_records = []
 
-        inserted_frames = []
+        def capture_upsert(records):
+            captured_records.extend(records)
+            return len(records)
 
-        def capture_insert(table_name, df):
-            inserted_frames.append((table_name, df.copy()))
-
-        mock_client.insert_df.side_effect = capture_insert
+        mock_upsert_assets.side_effect = capture_upsert
 
         result = fetch_precious_metals()
 
         assert result == 2
-        assert len(inserted_frames) == 1
+        assert len(captured_records) == 2
 
-        table_name, df = inserted_frames[0]
-        assert table_name == "portfolios_tracker_dw.dim_assets"
-        assert len(df) == 2
-
-        symbols = set(df["symbol"].tolist())
+        symbols = {row["symbol"] for row in captured_records}
         assert symbols == {"XAU", "XAG"}
-        assert set(df["asset_class"].tolist()) == {"COMMODITY"}
-        assert set(df["currency"].tolist()) == {"USD"}
-        assert set(df["sector"].tolist()) == {"Precious Metals"}
+        assert {row["asset_class"] for row in captured_records} == {"COMMODITY"}
+        assert {row["currency"] for row in captured_records} == {"USD"}
+        assert {row["sector"] for row in captured_records} == {"Precious Metals"}
 
-        xau_row = df[df["symbol"] == "XAU"].iloc[0]
-        xag_row = df[df["symbol"] == "XAG"].iloc[0]
+        xau_row = next(row for row in captured_records if row["symbol"] == "XAU")
+        xag_row = next(row for row in captured_records if row["symbol"] == "XAG")
 
         assert xau_row["external_api_metadata"]["source_symbol"] == "GC=F"
         assert xag_row["external_api_metadata"]["source_symbol"] == "SI=F"
         assert xau_row["external_api_metadata"]["commodity_type"] == "precious_metal"
         assert xag_row["external_api_metadata"]["unit"] == "troy_ounce"
 
-    @patch("dags.assets_dimension_etl.get_clickhouse_client")
+    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("yfinance.Ticker")
     def test_falls_back_when_yfinance_enrichment_fails(
-        self, mock_yf_ticker, mock_get_client
+        self, mock_yf_ticker, mock_upsert_assets
     ):
         from dags.assets_dimension_etl import fetch_precious_metals
 
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
         mock_yf_ticker.side_effect = Exception("provider unavailable")
+        captured_records = []
 
-        inserted_frames = []
+        def capture_upsert(records):
+            captured_records.extend(records)
+            return len(records)
 
-        def capture_insert(table_name, df):
-            inserted_frames.append((table_name, df.copy()))
-
-        mock_client.insert_df.side_effect = capture_insert
+        mock_upsert_assets.side_effect = capture_upsert
 
         result = fetch_precious_metals()
 
         assert result == 2
-        assert len(inserted_frames) == 1
-
-        _, df = inserted_frames[0]
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 2
+        assert len(captured_records) == 2
         # Fallback names are explicitly set by mapping.
-        assert "Gold (XAU/USD)" in df["name_en"].tolist()
-        assert "Silver (XAG/USD)" in df["name_en"].tolist()
+        assert "Gold (XAU/USD)" in [row["name_en"] for row in captured_records]
+        assert "Silver (XAG/USD)" in [row["name_en"] for row in captured_records]
