@@ -67,7 +67,6 @@ x-airflow-common: &airflow-common # Build custom image with your dependencies
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
-    AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
     # Performance
     NUMBA_CACHE_DIR: /tmp
     # API Keys (loaded from .env)
