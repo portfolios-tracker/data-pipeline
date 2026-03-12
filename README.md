@@ -59,7 +59,7 @@ graph LR
 1. **Initialize Environment**:
 
    ```bash
-   cp template.env .env
+   cp .env.example .env
    ```
 
 2. **Start Cluster**:
