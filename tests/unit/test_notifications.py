@@ -279,13 +279,6 @@ class TestGetLatestStockData:
                 "2024-12-22",
                 25500.0,
                 5000000,
-                2.5,
-                25000.0,
-                24000.0,
-                45.2,
-                100.5,
-                95.3,
-                5.2,
                 8.5,
                 "Steel",
                 "Basic Materials",
@@ -304,7 +297,6 @@ class TestGetLatestStockData:
         # Assert
         assert "HPG" in result
         assert result["HPG"]["close"] == 25500.0
-        assert result["HPG"]["rsi_14"] == 45.2
         assert result["HPG"]["pe_ratio"] == 15.5
         assert result["HPG"]["sector"] == "Steel"
 
@@ -352,14 +344,7 @@ class TestSummarizeNewsWithGemini:
         mock_get_data.return_value = {
             "HPG": {
                 "close": 25500.0,
-                "daily_return": 2.5,
                 "return_1m": 8.5,
-                "rsi_14": 45.2,
-                "macd": 100.5,
-                "macd_signal": 95.3,
-                "macd_hist": 5.2,
-                "ma_50": 25000.0,
-                "ma_200": 24000.0,
                 "pe_ratio": 15.5,
                 "roe": 18.5,
                 "roic": 12.5,

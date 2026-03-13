@@ -163,9 +163,9 @@ class TestFetchStockPrice:
         assert result.empty
 
     @patch("dags.etl_modules.fetcher.Quote")
-    def test_technical_indicators_calculated(self, mock_quote_class):
-        """Test that technical indicators (MA, RSI, MACD) are calculated."""
-        # Setup mock with enough data for indicators
+    def test_no_technical_indicators_in_output(self, mock_quote_class):
+        """Test that TA indicator columns are not included in output."""
+        # Setup mock with enough data
         mock_quote = Mock()
         dates = pd.date_range("2024-01-01", periods=250)
         prices = [100 + i * 0.1 for i in range(250)]
@@ -182,14 +182,9 @@ class TestFetchStockPrice:
 
         result = fetch_stock_price("HPG", "2024-01-01", "2024-12-31")
 
-        # Check indicators exist
-        assert "ma_50" in result.columns
-        assert "ma_200" in result.columns
-        assert "rsi_14" in result.columns
-        assert "macd" in result.columns
-        assert "macd_signal" in result.columns
-        assert "macd_hist" in result.columns
-        assert "daily_return" in result.columns
+        # TA columns should not be present (stripped in Phase 2 cleanup)
+        for col in ["ma_50", "ma_200", "rsi_14", "macd", "macd_signal", "macd_hist", "daily_return"]:
+            assert col not in result.columns, f"Stale TA column '{col}' should not be in output"
 
     @patch("dags.etl_modules.fetcher.Quote")
     def test_nan_values_cleaned(self, mock_quote_class):

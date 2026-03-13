@@ -72,13 +72,6 @@ def sample_stock_price_df():
             "low": [p * 0.98 for p in prices],
             "close": prices,
             "volume": np.random.randint(1000000, 10000000, 250),
-            "ma_50": pd.Series(prices).rolling(50).mean(),
-            "ma_200": pd.Series(prices).rolling(200).mean(),
-            "rsi_14": np.random.uniform(30, 70, 250),
-            "macd": np.random.uniform(-2, 2, 250),
-            "macd_signal": np.random.uniform(-2, 2, 250),
-            "macd_hist": np.random.uniform(-1, 1, 250),
-            "daily_return": pd.Series(prices).pct_change() * 100,
         }
     )
 

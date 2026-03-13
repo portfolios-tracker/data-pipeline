@@ -1,5 +1,4 @@
 import pandas as pd
-import pandas_ta as ta
 import logging
 import os
 import numpy as np
@@ -128,56 +127,6 @@ def fetch_stock_price(symbol, start_date, end_date):
     # Clean for Decimal
     df = clean_decimal_cols(df, ["close"])
     df["volume"] = df["volume"].fillna(0).astype(int)
-
-    # Technical Indicators
-    try:
-        df["calc_date"] = pd.to_datetime(df["trading_date"])
-        df.set_index("calc_date", inplace=True)
-        df.sort_index(inplace=True)
-
-        df["ma_50"] = ta.sma(df["close"], length=50)
-        df["ma_200"] = ta.sma(df["close"], length=200)
-        df["rsi_14"] = ta.rsi(df["close"], length=14)
-        df["daily_return"] = df["close"].pct_change() * 100
-
-        # MACD (New)
-        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        if macd is not None:
-            # pandas_ta returns columns like MACD_12_26_9, MACDh_..., MACDs_...
-            # We rename them to our simple schema
-            df["macd"] = macd.iloc[:, 0]  # MACD Line
-            df["macd_hist"] = macd.iloc[:, 1]  # Histogram
-            df["macd_signal"] = macd.iloc[:, 2]  # Signal Line
-
-        # Backfill & FillNa
-        cols_to_fill = [
-            "ma_50",
-            "ma_200",
-            "rsi_14",
-            "daily_return",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-        ]
-        for c in cols_to_fill:
-            if c in df.columns:
-                df[c] = df[c].bfill().fillna(0)
-            else:
-                df[c] = 0.0
-
-        df.reset_index(drop=True, inplace=True)
-    except Exception as e:
-        logging.error(f"Error indicators {symbol}: {e}")
-        for c in [
-            "ma_50",
-            "ma_200",
-            "rsi_14",
-            "daily_return",
-            "macd",
-            "macd_signal",
-            "macd_hist",
-        ]:
-            df[c] = 0.0
 
     return df
 
@@ -426,13 +375,8 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
         df = clean_decimal_cols(df, ["close"])
         df["volume"] = df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
 
-        # Technical indicators are not meaningful for indices in this context; set to 0.
-        for col in ["ma_50", "ma_200", "rsi_14", "daily_return", "macd", "macd_signal", "macd_hist"]:
-            df[col] = 0.0
-
         required_cols = [
             "ticker", "trading_date", "close", "volume",
-            "ma_50", "ma_200", "rsi_14", "daily_return", "macd", "macd_signal", "macd_hist",
             "source",
         ]
         for col in required_cols:
