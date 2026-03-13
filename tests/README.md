@@ -172,7 +172,6 @@ See [conftest.py](conftest.py) for all available fixtures:
 
 GitHub Actions workflow at `.github/workflows/test.yml` runs on every PR:
 
-- Validates DAG registry against README (`scripts/validate_dag_registry.py`)
 - Runs pytest with coverage report
 - Blocks merge if coverage < 50%
 - Uploads coverage report as artifact
