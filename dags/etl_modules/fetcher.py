@@ -5,7 +5,7 @@ import numpy as np
 from supabase import create_client
 from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
-from .cache import cached_data
+from etl_modules.cache import cached_data
 
 
 # ---------------------------------------------------------------------------
