@@ -63,6 +63,8 @@ class TestFetchVnStocks:
         assert by_symbol["C4G12005"]["asset_class"] == "STOCK"
         assert by_symbol["BONDVN"]["asset_class"] == "BOND"
         assert by_symbol["41I1G4000"]["external_api_metadata"]["symbol_type"] == "FU"
+        assert by_symbol["C4G12005"]["external_api_metadata"]["symbol_type"] == "CW"
+        assert by_symbol["BONDVN"]["external_api_metadata"]["symbol_type"] == "FU_BOND"
 
     @patch("vnstock.Listing")
     def test_keeps_symbols_when_type_column_absent(self, mock_listing_class):

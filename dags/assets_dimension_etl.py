@@ -167,7 +167,8 @@ def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
         "FU": "INDEX",
         "FU_INDEX": "INDEX",
         "FU_BOND": "BOND",
-        # Covered warrants are equity-linked and best represented under STOCK.
+        # Covered warrants are derivatives, but assets.asset_class currently has no
+        # dedicated derivative class. We map CW to STOCK as the closest supported class.
         "CW": "STOCK",
     }
     if normalized in direct_map:
@@ -204,7 +205,7 @@ def fetch_vn_stocks(**context):
             "vnstock symbols_by_exchange() returned no type column; defaulting all VN instruments to STOCK"
         )
         df_list["type"] = "STOCK"
-    df_list["asset_class"] = df_list["type"].apply(_map_vnstock_type_to_asset_class)
+    df_list["asset_class"] = df_list["type"].map(_map_vnstock_type_to_asset_class)
 
     logger.info(f"Found {len(df_list)} active VN instruments")
 
@@ -265,12 +266,7 @@ def fetch_vn_stocks(**context):
         )
 
     upserted = upsert_assets_records(records)
-    class_distribution = (
-        pd.Series([record["asset_class"] for record in records])
-        .value_counts()
-        .sort_index()
-        .to_dict()
-    )
+    class_distribution = df["asset_class"].value_counts().sort_index().to_dict()
     logger.info(
         "✅ Upserted %s VN instruments with asset class distribution: %s",
         upserted,
