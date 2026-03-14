@@ -4,7 +4,7 @@ Story: prep-3-seed-asset-data
 Architecture: Single Table Inheritance (STI)
 
 Fetches:
-- VN stocks (vnstock) → asset_class=STOCK, market=VN
+- VN listed instruments (vnstock) → mapped to supported asset_class values, market=VN
 - US stocks (Wikipedia S&P 500 + yfinance) → asset_class=STOCK, market=US
 - Crypto (CoinGecko) → asset_class=CRYPTO, market=NULL
 - Precious metals (yfinance futures mapping) → asset_class=COMMODITY, market=NULL
@@ -153,31 +153,42 @@ def upsert_assets_records(records: list[dict]) -> int:
     return len(records)
 
 
-def delete_vn_non_stock_assets(symbols: list[str]) -> int:
-    """Delete legacy VN assets that were previously misclassified as STOCK."""
-    if not symbols:
-        return 0
+def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
+    """Map vnstock VCI listing types to supported assets.asset_class values."""
+    normalized = str(vnstock_type or "STOCK").strip().upper()
 
-    with _get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                DELETE FROM public.assets
-                WHERE market = 'VN'
-                  AND asset_class = 'STOCK'
-                  AND source = 'vnstock'
-                  AND symbol = ANY(%s)
-                """,
-                (symbols,),
-            )
-            deleted = cur.rowcount
-    return deleted
+    direct_map = {
+        "STOCK": "STOCK",
+        "ETF": "ETF",
+        "FUND": "FUND",
+        "BOND": "BOND",
+        "INDEX": "INDEX",
+        # VN derivatives are primarily index futures (e.g. VN30 futures).
+        "FU": "INDEX",
+        "FU_INDEX": "INDEX",
+        "FU_BOND": "BOND",
+        # Covered warrants are equity-linked and best represented under STOCK.
+        "CW": "STOCK",
+    }
+    if normalized in direct_map:
+        return direct_map[normalized]
+
+    if normalized.startswith("FU"):
+        return "INDEX"
+    if "BOND" in normalized:
+        return "BOND"
+
+    logger.warning(
+        "Unknown vnstock symbol type '%s'; defaulting asset_class to STOCK",
+        normalized,
+    )
+    return "STOCK"
 
 
 def fetch_vn_stocks(**context):
     """
-    Fetch VN stocks from vnstock
-    → asset_class = 'STOCK', market = 'VN'
+    Fetch VN listed instruments from vnstock (VCI source)
+    and map provider types to supported assets.asset_class values.
     """
     from vnstock import Listing
 
@@ -185,37 +196,23 @@ def fetch_vn_stocks(**context):
 
     logger.info("Fetching VN stock list from vnstock...")
 
-    # Get all stocks
+    # Get all listed VN instruments
     df_list = listing.symbols_by_exchange()
     df_list = df_list[df_list["exchange"].str.upper() != "DELISTED"]
-    non_stock_symbols: list[str] = []
-    if "type" in df_list.columns:
-        # Extract symbols where provider type is not STOCK (e.g. futures/derivatives).
-        non_stock_symbols = (
-            df_list[df_list["type"].astype(str).str.upper() != "STOCK"]["symbol"]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-        before_type_filter = len(df_list)
-        df_list = df_list[df_list["type"].astype(str).str.upper() == "STOCK"]
-        logger.info(
-            "Filtered %s non-stock VN instruments based on vnstock type column",
-            before_type_filter - len(df_list),
-        )
-    else:
+    if "type" not in df_list.columns:
         logger.warning(
-            "vnstock symbols_by_exchange() returned no type column; cannot filter derivatives explicitly"
+            "vnstock symbols_by_exchange() returned no type column; defaulting all VN instruments to STOCK"
         )
+        df_list["type"] = "STOCK"
+    df_list["asset_class"] = df_list["type"].apply(_map_vnstock_type_to_asset_class)
 
-    logger.info(f"Found {len(df_list)} active VN stocks")
+    logger.info(f"Found {len(df_list)} active VN instruments")
 
     # Get industry data
     try:
         df_ind = listing.symbols_by_industries()
         df = pd.merge(
-            df_list[["symbol", "organ_name", "exchange"]],
+            df_list[["symbol", "organ_name", "exchange", "type", "asset_class"]],
             df_ind[["symbol", "icb_name2", "icb_name3"]],
             on="symbol",
             how="left",
@@ -223,7 +220,7 @@ def fetch_vn_stocks(**context):
         logger.info("Successfully merged industry data")
     except Exception as e:
         logger.warning(f"Failed to fetch industries: {e}, using fallback")
-        df = df_list[["symbol", "organ_name", "exchange"]].copy()
+        df = df_list[["symbol", "organ_name", "exchange", "type", "asset_class"]].copy()
         df["icb_name2"] = "Unknown"
         df["icb_name3"] = "Unknown"
 
@@ -242,7 +239,9 @@ def fetch_vn_stocks(**context):
                 "name_local": str(row["organ_name"])
                 if pd.notna(row["organ_name"])
                 else "",
-                "asset_class": "STOCK",  # STI discriminator
+                "asset_class": str(row["asset_class"])
+                if pd.notna(row["asset_class"])
+                else "STOCK",
                 "market": "VN",  # Market code
                 "currency": "VND",
                 "exchange": str(row["exchange"])
@@ -256,20 +255,27 @@ def fetch_vn_stocks(**context):
                 else "Unknown",
                 "logo_url": "",
                 "description": "",
-                "external_api_metadata": {"source_api": "vnstock"},
+                "external_api_metadata": {
+                    "source_api": "vnstock",
+                    "symbol_type": str(row["type"]) if pd.notna(row["type"]) else "STOCK",
+                },
                 "source": "vnstock",
                 "is_active": 1,
             }
         )
 
     upserted = upsert_assets_records(records)
-    deleted = delete_vn_non_stock_assets(non_stock_symbols)
-    if deleted:
-        logger.info(
-            "🧹 Deleted %s legacy VN rows misclassified as STOCK (source=vnstock)",
-            deleted,
-        )
-    logger.info(f"✅ Upserted {upserted} VN stocks (asset_class=STOCK, market=VN)")
+    class_distribution = (
+        pd.Series([record["asset_class"] for record in records])
+        .value_counts()
+        .sort_index()
+        .to_dict()
+    )
+    logger.info(
+        "✅ Upserted %s VN instruments with asset class distribution: %s",
+        upserted,
+        class_distribution,
+    )
     return upserted
 
 

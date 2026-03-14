@@ -16,28 +16,30 @@ import pytest
 class TestFetchVnStocks:
     """Unit tests for fetch_vn_stocks type-based classification."""
 
-    @patch("dags.assets_dimension_etl.delete_vn_non_stock_assets")
-    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("vnstock.Listing")
-    def test_only_stock_type_is_upserted(
-        self, mock_listing_class, mock_upsert_assets, mock_delete_non_stock
-    ):
-        from dags.assets_dimension_etl import fetch_vn_stocks
+    def test_maps_provider_types_to_supported_asset_classes(self, mock_listing_class):
+        from dags import assets_dimension_etl as module
 
         mock_listing = MagicMock()
         mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
             {
-                "symbol": ["HPG", "41I1G4000"],
-                "organ_name": ["Hoa Phat Group", "VN30 Index Futures 042026"],
-                "exchange": ["HOSE", "HNX"],
-                "type": ["STOCK", "FU"],
+                "symbol": ["HPG", "41I1G4000", "E1VFVN30", "C4G12005", "BONDVN"],
+                "organ_name": [
+                    "Hoa Phat Group",
+                    "VN30 Index Futures 042026",
+                    "VN30 ETF",
+                    "Covered Warrant",
+                    "Government Bond Futures",
+                ],
+                "exchange": ["HOSE", "HNX", "HOSE", "HOSE", "HNX"],
+                "type": ["STOCK", "FU", "ETF", "CW", "FU_BOND"],
             }
         )
         mock_listing.symbols_by_industries.return_value = pd.DataFrame(
             {
-                "symbol": ["HPG"],
-                "icb_name2": ["Materials"],
-                "icb_name3": ["Steel"],
+                "symbol": ["HPG", "E1VFVN30"],
+                "icb_name2": ["Materials", "Fund"],
+                "icb_name3": ["Steel", "ETF"],
             }
         )
         mock_listing_class.return_value = mock_listing
@@ -48,24 +50,23 @@ class TestFetchVnStocks:
             captured_records.extend(records)
             return len(records)
 
-        mock_upsert_assets.side_effect = capture_upsert
-        mock_delete_non_stock.return_value = 1
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+            result = module.fetch_vn_stocks()
 
-        result = fetch_vn_stocks()
+        assert result == 5
+        assert len(captured_records) == 5
 
-        assert result == 1
-        assert len(captured_records) == 1
-        assert captured_records[0]["symbol"] == "HPG"
-        assert captured_records[0]["asset_class"] == "STOCK"
-        mock_delete_non_stock.assert_called_once_with(["41I1G4000"])
+        by_symbol = {row["symbol"]: row for row in captured_records}
+        assert by_symbol["HPG"]["asset_class"] == "STOCK"
+        assert by_symbol["41I1G4000"]["asset_class"] == "INDEX"
+        assert by_symbol["E1VFVN30"]["asset_class"] == "ETF"
+        assert by_symbol["C4G12005"]["asset_class"] == "STOCK"
+        assert by_symbol["BONDVN"]["asset_class"] == "BOND"
+        assert by_symbol["41I1G4000"]["external_api_metadata"]["symbol_type"] == "FU"
 
-    @patch("dags.assets_dimension_etl.delete_vn_non_stock_assets")
-    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("vnstock.Listing")
-    def test_keeps_symbols_when_type_column_absent(
-        self, mock_listing_class, mock_upsert_assets, mock_delete_non_stock
-    ):
-        from dags.assets_dimension_etl import fetch_vn_stocks
+    def test_keeps_symbols_when_type_column_absent(self, mock_listing_class):
+        from dags import assets_dimension_etl as module
 
         mock_listing = MagicMock()
         mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
@@ -78,24 +79,26 @@ class TestFetchVnStocks:
         mock_listing.symbols_by_industries.side_effect = Exception("industry unavailable")
         mock_listing_class.return_value = mock_listing
 
-        mock_upsert_assets.side_effect = lambda records: len(records)
-        mock_delete_non_stock.return_value = 0
+        captured_records = []
 
-        result = fetch_vn_stocks()
+        def capture_upsert(records):
+            captured_records.extend(records)
+            return len(records)
+
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+            result = module.fetch_vn_stocks()
+
         assert result == 2
-        mock_delete_non_stock.assert_called_once_with([])
+        assert {row["asset_class"] for row in captured_records} == {"STOCK"}
 
 
 @pytest.mark.unit
 class TestFetchPreciousMetals:
     """Unit tests for fetch_precious_metals task."""
 
-    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("yfinance.Ticker")
-    def test_inserts_xau_xag_with_commodity_class(
-        self, mock_yf_ticker, mock_upsert_assets
-    ):
-        from dags.assets_dimension_etl import fetch_precious_metals
+    def test_inserts_xau_xag_with_commodity_class(self, mock_yf_ticker):
+        from dags import assets_dimension_etl as module
 
         # Return predictable metadata for both provider symbols.
         def make_ticker(symbol):
@@ -113,9 +116,8 @@ class TestFetchPreciousMetals:
             captured_records.extend(records)
             return len(records)
 
-        mock_upsert_assets.side_effect = capture_upsert
-
-        result = fetch_precious_metals()
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+            result = module.fetch_precious_metals()
 
         assert result == 2
         assert len(captured_records) == 2
@@ -134,12 +136,9 @@ class TestFetchPreciousMetals:
         assert xau_row["external_api_metadata"]["commodity_type"] == "precious_metal"
         assert xag_row["external_api_metadata"]["unit"] == "troy_ounce"
 
-    @patch("dags.assets_dimension_etl.upsert_assets_records")
     @patch("yfinance.Ticker")
-    def test_falls_back_when_yfinance_enrichment_fails(
-        self, mock_yf_ticker, mock_upsert_assets
-    ):
-        from dags.assets_dimension_etl import fetch_precious_metals
+    def test_falls_back_when_yfinance_enrichment_fails(self, mock_yf_ticker):
+        from dags import assets_dimension_etl as module
 
         mock_yf_ticker.side_effect = Exception("provider unavailable")
         captured_records = []
@@ -148,9 +147,8 @@ class TestFetchPreciousMetals:
             captured_records.extend(records)
             return len(records)
 
-        mock_upsert_assets.side_effect = capture_upsert
-
-        result = fetch_precious_metals()
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+            result = module.fetch_precious_metals()
 
         assert result == 2
         assert len(captured_records) == 2
