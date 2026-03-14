@@ -58,10 +58,10 @@ class TestFetchVnStocks:
 
         by_symbol = {row["symbol"]: row for row in captured_records}
         assert by_symbol["HPG"]["asset_class"] == "STOCK"
-        assert by_symbol["41I1G4000"]["asset_class"] == "INDEX"
+        assert by_symbol["41I1G4000"]["asset_class"] == "DERIVATIVE"
         assert by_symbol["E1VFVN30"]["asset_class"] == "ETF"
-        assert by_symbol["C4G12005"]["asset_class"] == "STOCK"
-        assert by_symbol["BONDVN"]["asset_class"] == "BOND"
+        assert by_symbol["C4G12005"]["asset_class"] == "DERIVATIVE"
+        assert by_symbol["BONDVN"]["asset_class"] == "DERIVATIVE"
         assert by_symbol["41I1G4000"]["external_api_metadata"]["symbol_type"] == "FU"
         assert by_symbol["C4G12005"]["external_api_metadata"]["symbol_type"] == "CW"
         assert by_symbol["BONDVN"]["external_api_metadata"]["symbol_type"] == "FU_BOND"

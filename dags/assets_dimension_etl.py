@@ -163,19 +163,17 @@ def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
         "FUND": "FUND",
         "BOND": "BOND",
         "INDEX": "INDEX",
-        # VN derivatives are primarily index futures (e.g. VN30 futures).
-        "FU": "INDEX",
-        "FU_INDEX": "INDEX",
-        "FU_BOND": "BOND",
-        # Covered warrants are derivatives, but assets.asset_class currently has no
-        # dedicated derivative class. We map CW to STOCK as the closest supported class.
-        "CW": "STOCK",
+        # Tradable contracts with leverage/expiry are derivatives.
+        "FU": "DERIVATIVE",
+        "FU_INDEX": "DERIVATIVE",
+        "FU_BOND": "DERIVATIVE",
+        "CW": "DERIVATIVE",
     }
     if normalized in direct_map:
         return direct_map[normalized]
 
-    if normalized.startswith("FU"):
-        return "INDEX"
+    if any(token in normalized for token in ["FU", "WARRANT", "CW"]):
+        return "DERIVATIVE"
     if "BOND" in normalized:
         return "BOND"
 
