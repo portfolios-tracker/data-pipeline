@@ -22,8 +22,8 @@ USER airflow
 
 
 
-# Copy dependency files (paths are relative to services/data-pipeline build context)
-COPY pyproject.toml uv.lock /opt/airflow/
+# Copy dependency/project metadata files needed for wheel build
+COPY pyproject.toml uv.lock README.md /opt/airflow/
 
 
 
@@ -33,4 +33,10 @@ COPY pyproject.toml uv.lock /opt/airflow/
 
 WORKDIR /opt/airflow
 
-RUN --mount=type=cache,id=uv,target=/opt/airflow/.cache/uv uv pip install --system --no-cache .
+USER root
+
+RUN --mount=type=cache,id=uv,target=/opt/airflow/.cache/uv \
+    uv export --format requirements-txt --no-dev --no-hashes -o /tmp/requirements.txt && \
+    uv pip install --system --no-cache -r /tmp/requirements.txt
+
+USER airflow
