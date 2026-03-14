@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-import google.generativeai as genai
+from google import genai
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from vnstock import Company
