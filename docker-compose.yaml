@@ -2,7 +2,7 @@ name: portfolios-tracker-data-pipeline
 x-airflow-common: &airflow-common
   build:
     context: .
-    dockerfile: Dockerfile
+    dockerfile: ${AIRFLOW_DOCKERFILE_PATH:-Dockerfile}
   image: portfolios-tracker-airflow:latest
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
