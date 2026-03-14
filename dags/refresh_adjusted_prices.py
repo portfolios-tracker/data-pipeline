@@ -112,13 +112,6 @@ with DAG(
                 "trading_date",
                 "close",
                 "volume",
-                "ma_50",
-                "ma_200",
-                "rsi_14",
-                "daily_return",
-                "macd",
-                "macd_signal",
-                "macd_hist",
                 "source",
             ]
             df = df[[c for c in cols if c in df.columns]]

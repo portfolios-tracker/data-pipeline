@@ -14,10 +14,10 @@ def get_latest_stock_data(tickers):
     Postgres tables for the given tickers.
 
     Equivalent coverage to the former ClickHouse views:
-    - market_data_prices: latest daily close/volume + technical indicators
+    - market_data_prices: latest daily close/volume
     - market_data_financial_ratios: latest fiscal snapshot as-of trading_date
     - assets: sector/industry metadata
-    Returns a dictionary with ticker as key and technical/fundamental data as value.
+    Returns a dictionary with ticker as key and fundamental data as value.
     """
     if not tickers:
         return {}
@@ -37,14 +37,7 @@ def get_latest_stock_data(tickers):
                             p.ticker,
                             p.trading_date,
                             p.close,
-                            p.volume,
-                            p.daily_return,
-                            p.ma_50,
-                            p.ma_200,
-                            p.rsi_14,
-                            p.macd,
-                            p.macd_signal,
-                            p.macd_hist
+                            p.volume
                         FROM public.market_data_prices p
                         WHERE p.ticker = ANY(%s)
                         ORDER BY p.ticker, p.trading_date DESC
@@ -54,13 +47,6 @@ def get_latest_stock_data(tickers):
                         lp.trading_date::text,
                         lp.close,
                         lp.volume,
-                        lp.daily_return,
-                        lp.ma_50,
-                        lp.ma_200,
-                        lp.rsi_14,
-                        lp.macd,
-                        lp.macd_signal,
-                        lp.macd_hist,
                         CASE
                             WHEN p20.close IS NULL OR p20.close = 0 THEN 0
                             ELSE ((lp.close - p20.close) / p20.close) * 100
@@ -111,22 +97,15 @@ def get_latest_stock_data(tickers):
                 "trading_date": str(row[1]),
                 "close": float(row[2]) if row[2] is not None else 0.0,
                 "volume": int(row[3]) if row[3] is not None else 0,
-                "daily_return": float(row[4]) if row[4] is not None else 0.0,
-                "ma_50": float(row[5]) if row[5] is not None else 0.0,
-                "ma_200": float(row[6]) if row[6] is not None else 0.0,
-                "rsi_14": float(row[7]) if row[7] is not None else 0.0,
-                "macd": float(row[8]) if row[8] is not None else 0.0,
-                "macd_signal": float(row[9]) if row[9] is not None else 0.0,
-                "macd_hist": float(row[10]) if row[10] is not None else 0.0,
-                "return_1m": float(row[11]) if row[11] is not None else 0.0,
-                "sector": str(row[12]) if row[12] else "N/A",
-                "industry": str(row[13]) if row[13] else "N/A",
-                "pe_ratio": float(row[14]) if row[14] is not None else 0.0,
-                "roe": float(row[15]) if row[15] is not None else 0.0,
-                "roic": float(row[16]) if row[16] is not None else 0.0,
-                "debt_to_equity": float(row[17]) if row[17] is not None else 0.0,
-                "net_profit_margin": float(row[18]) if row[18] is not None else 0.0,
-                "eps": float(row[19]) if row[19] is not None else 0.0,
+                "return_1m": float(row[4]) if row[4] is not None else 0.0,
+                "sector": str(row[5]) if row[5] else "N/A",
+                "industry": str(row[6]) if row[6] else "N/A",
+                "pe_ratio": float(row[7]) if row[7] is not None else 0.0,
+                "roe": float(row[8]) if row[8] is not None else 0.0,
+                "roic": float(row[9]) if row[9] is not None else 0.0,
+                "debt_to_equity": float(row[10]) if row[10] is not None else 0.0,
+                "net_profit_margin": float(row[11]) if row[11] is not None else 0.0,
+                "eps": float(row[12]) if row[12] is not None else 0.0,
             }
 
         return stock_data
@@ -179,11 +158,7 @@ Here is today's news data with current technical and fundamental indicators:
             data = stock_data[ticker]
             prompt += f"""
   Current Price: {data["close"]:.2f} VND (1000s)
-  Daily Return: {data["daily_return"]:.2f}%
   1-Month Return: {data["return_1m"]:.2f}%
-  RSI(14): {data["rsi_14"]:.2f}
-  MACD: {data["macd"]:.2f} (Signal: {data["macd_signal"]:.2f}, Hist: {data["macd_hist"]:.2f})
-  MA50: {data["ma_50"]:.2f}, MA200: {data["ma_200"]:.2f}
   P/E Ratio: {data["pe_ratio"]:.2f}
   ROE: {data["roe"]:.2f}%, ROIC: {data["roic"]:.2f}%
   Debt/Equity: {data["debt_to_equity"]:.2f}

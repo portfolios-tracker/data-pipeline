@@ -94,13 +94,6 @@ with DAG(
             "close",
             "volume",
             "ticker",
-            "daily_return",
-            "ma_50",
-            "ma_200",
-            "rsi_14",
-            "macd",
-            "macd_signal",
-            "macd_hist",
             "source",
         ]
 
@@ -121,19 +114,11 @@ with DAG(
                         """
                         INSERT INTO public.market_data_prices
                             (trading_date, close, volume, ticker,
-                             daily_return, ma_50, ma_200, rsi_14, macd, macd_signal,
-                             macd_hist, source)
+                             source)
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
                             close         = EXCLUDED.close,
                             volume        = EXCLUDED.volume,
-                            daily_return  = EXCLUDED.daily_return,
-                            ma_50         = EXCLUDED.ma_50,
-                            ma_200        = EXCLUDED.ma_200,
-                            rsi_14        = EXCLUDED.rsi_14,
-                            macd          = EXCLUDED.macd,
-                            macd_signal   = EXCLUDED.macd_signal,
-                            macd_hist     = EXCLUDED.macd_hist,
                             source        = EXCLUDED.source,
                             ingested_at   = NOW()
                         """,
