@@ -16,15 +16,15 @@ Architecture Notes:
 - Market-session filtering is NOT applied at DAG level in this phase
 """
 
+import os
+from datetime import datetime, timedelta
+
+import requests
 from airflow import DAG
 from airflow.sdk import task
-from datetime import datetime, timedelta
-import requests
-import os
-
 from etl_modules.notifications import (
-    send_success_notification,
     send_failure_notification,
+    send_success_notification,
 )
 
 # Configuration
@@ -58,7 +58,7 @@ with DAG(
         if not DATA_PIPELINE_API_KEY:
             raise ValueError("DATA_PIPELINE_API_KEY environment variable is not set")
 
-        url = f"{API_BASE_URL}/portfolios/snapshots/batch"
+        url = f"{API_BASE_URL}/api/v1/portfolios/snapshots/batch"
         headers = {
             "X-Api-Key": DATA_PIPELINE_API_KEY,
             "Content-Type": "application/json",
