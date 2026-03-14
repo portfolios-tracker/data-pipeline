@@ -24,7 +24,7 @@ from dags.etl_modules.fetcher import (
     fetch_income_stmt,
     fetch_news,
     fetch_stock_price,
-    get_active_vn_tickers,
+    get_active_vn_stock_tickers,
 )
 
 # ============================================================================
@@ -549,8 +549,8 @@ class TestFetchNews:
 
 
 @pytest.mark.unit
-class TestGetActiveVnTickers:
-    """Unit tests for get_active_vn_tickers ticker filtering."""
+class TestGetActiveVnStockTickers:
+    """Unit tests for get_active_vn_stock_tickers ticker filtering."""
 
     @patch("dags.etl_modules.fetcher.create_client")
     def test_normalizes_symbols_and_deduplicates(self, mock_create_client):
@@ -558,16 +558,14 @@ class TestGetActiveVnTickers:
         mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
             {"symbol": "hpg"},
             {"symbol": "VCB"},
-            {"symbol": "41B5G3000"},
             {"symbol": " VCB "},
-            {"symbol": "VN30F1M"},
             {"symbol": None},
             {"symbol": ""},
             {"symbol": "   "},
-            {"symbol": "A32"},
+            {"symbol": "FPT"},
         ]
         mock_create_client.return_value = mock_client
 
-        result = get_active_vn_tickers()
+        result = get_active_vn_stock_tickers()
 
-        assert result == ["HPG", "VCB", "41B5G3000", "VN30F1M", "A32"]
+        assert result == ["HPG", "VCB", "FPT"]

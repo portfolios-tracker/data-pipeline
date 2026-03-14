@@ -184,7 +184,7 @@ def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
     return "STOCK"
 
 
-def fetch_vn_stocks(**context):
+def fetch_vn_instruments(**context):
     """
     Fetch VN listed instruments from vnstock (VCI source)
     and map provider types to supported assets.asset_class values.
@@ -193,7 +193,7 @@ def fetch_vn_stocks(**context):
 
     listing = Listing(source="VCI")
 
-    logger.info("Fetching VN stock list from vnstock...")
+    logger.info("Fetching VN instrument list from vnstock...")
 
     # Get all listed VN instruments
     df_list = listing.symbols_by_exchange()
@@ -519,8 +519,8 @@ def fetch_precious_metals(**context):
 
 # Define tasks
 task_vn = PythonOperator(
-    task_id="fetch_vn_stocks",
-    python_callable=fetch_vn_stocks,
+    task_id="fetch_vn_instruments",
+    python_callable=fetch_vn_instruments,
     dag=dag,
 )
 

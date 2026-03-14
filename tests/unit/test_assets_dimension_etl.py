@@ -13,8 +13,8 @@ import pytest
 
 
 @pytest.mark.unit
-class TestFetchVnStocks:
-    """Unit tests for fetch_vn_stocks type-based classification."""
+class TestFetchVnInstruments:
+    """Unit tests for fetch_vn_instruments type-based classification."""
 
     @patch("vnstock.Listing")
     def test_maps_provider_types_to_supported_asset_classes(self, mock_listing_class):
@@ -51,7 +51,7 @@ class TestFetchVnStocks:
             return len(records)
 
         with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
-            result = module.fetch_vn_stocks()
+            result = module.fetch_vn_instruments()
 
         assert result == 5
         assert len(captured_records) == 5
@@ -88,7 +88,7 @@ class TestFetchVnStocks:
             return len(records)
 
         with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
-            result = module.fetch_vn_stocks()
+            result = module.fetch_vn_instruments()
 
         assert result == 2
         assert {row["asset_class"] for row in captured_records} == {"STOCK"}

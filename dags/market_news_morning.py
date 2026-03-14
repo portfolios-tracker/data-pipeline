@@ -11,7 +11,7 @@ import sys
 # Add dags directory to path so we can import etl_modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from etl_modules.fetcher import fetch_news, get_active_vn_tickers
+from etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
 from etl_modules.notifications import (
     send_success_notification,
     send_failure_notification,
@@ -43,7 +43,7 @@ with DAG(
     @task
     def extract_news():
         news_data = []
-        tickers = get_active_vn_tickers(raise_on_fallback=True)
+        tickers = get_active_vn_stock_tickers(raise_on_fallback=True)
         print(f"Fetching daily news for {len(tickers)} tickers...")
 
         for ticker in tickers:

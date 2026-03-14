@@ -14,9 +14,9 @@ from etl_modules.cache import cached_data
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
-def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
+def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
     """
-    Return active VN stock tickers from the Supabase ``assets`` table.
+    Return active VN STOCK tickers from the Supabase ``assets`` table.
 
     Falls back to a hardcoded seed list when Supabase is not reachable
     (e.g. during DAG file parsing on Airflow startup).
@@ -57,20 +57,20 @@ def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
         # Treat an empty result set as a fallback condition as well
         if raise_on_fallback:
             raise RuntimeError(
-                "Supabase assets query returned zero active VN tickers "
+                "Supabase assets query returned zero active VN stock tickers "
                 "for market=VN and asset_class=STOCK. "
                 "Task will fail so Airflow can retry. "
                 "If this is persistent, check assets table contents and filters."
             )
         logging.warning(
-            "Supabase assets query returned zero active VN tickers, "
+            "Supabase assets query returned zero active VN stock tickers, "
             f"falling back to seed list of {len(_FALLBACK_VN_TICKERS)} tickers "
             "(partial ingestion risk)."
         )
     except Exception as e:
         if raise_on_fallback:
             raise RuntimeError(
-                f"Could not load active VN tickers from Supabase assets table: {e}. "
+                f"Could not load active VN stock tickers from Supabase assets table: {e}. "
                 "Task will fail so Airflow can retry. "
                 "If this is persistent, check Supabase connectivity and the assets table."
             ) from e
@@ -80,6 +80,11 @@ def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
         )
 
     return list(_FALLBACK_VN_TICKERS)
+
+
+def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
+    """Backward-compatible alias for get_active_vn_stock_tickers()."""
+    return get_active_vn_stock_tickers(raise_on_fallback=raise_on_fallback)
 
 
 def clean_decimal_cols(df, cols):
