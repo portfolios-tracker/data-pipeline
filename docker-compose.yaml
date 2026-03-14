@@ -45,14 +45,17 @@
 # Feel free to modify this file to suit your needs.
 ---
 name: portfolios-tracker-data-pipeline
-x-airflow-common: &airflow-common # Build custom image with your dependencies
+x-airflow-common:
+  # Build custom image with your dependencies
+  &airflow-common
   build:
     context: .
     dockerfile: Dockerfile
   image: portfolios-tracker-airflow:latest
-  env_file:
-    - ${ENV_FILE_PATH:-.env}
-  environment: &airflow-common-env
+  environment:
+    # In Coolify Git-based deploys, env values are injected from the UI/secret store.
+    # Avoid hard dependency on a local .env file via env_file.
+    &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
