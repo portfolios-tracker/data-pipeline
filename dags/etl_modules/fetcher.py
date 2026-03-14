@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 import os
 import numpy as np
+import re
 from supabase import create_client
 from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
@@ -12,6 +13,29 @@ from etl_modules.cache import cached_data
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
 # ---------------------------------------------------------------------------
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
+_VN_EQUITY_TICKER_PATTERN = re.compile(r"^[A-Z]{3,4}$")
+
+
+def _normalize_and_filter_vn_tickers(symbols: list[str]) -> list[str]:
+    """
+    Normalize and keep only VN equity-like tickers accepted by vnstock Company APIs.
+
+    vnstock company endpoints accept stock symbols (typically 3-4 uppercase letters).
+    Filter out structured instruments (e.g. bond/fund codes like 41B5G3000) that
+    would otherwise cause ValueError and consume rate-limit quota.
+    """
+    normalized: list[str] = []
+    for symbol in symbols:
+        if symbol is None:
+            continue
+        cleaned = str(symbol).strip().upper()
+        if not cleaned:
+            continue
+        if _VN_EQUITY_TICKER_PATTERN.fullmatch(cleaned):
+            normalized.append(cleaned)
+
+    # Preserve order while deduplicating
+    return list(dict.fromkeys(normalized))
 
 
 def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
@@ -44,8 +68,15 @@ def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
             .order("symbol")
             .execute()
         )
-        tickers = [row["symbol"] for row in response.data if row.get("symbol")]
+        raw_tickers = [row["symbol"] for row in response.data if row.get("symbol")]
+        tickers = _normalize_and_filter_vn_tickers(raw_tickers)
         if tickers:
+            skipped = len(raw_tickers) - len(tickers)
+            if skipped:
+                logging.warning(
+                    "Filtered %s non-equity or invalid VN symbols before vnstock news fetch",
+                    skipped,
+                )
             logging.info(f"Loaded {len(tickers)} active VN tickers from assets table")
             return tickers
         # Treat an empty result set as a fallback condition as well
@@ -469,6 +500,11 @@ def fetch_news(symbol):
             df, ["price_at_publish", "price_change", "price_change_ratio", "rsi", "rs"]
         )
         return df[required_cols]
+    except SystemExit as e:
+        # vnstock raises SystemExit when rate limit is exceeded.
+        # Return empty data so the DAG can continue and persist partial results.
+        logging.warning(f"Rate-limited while fetching news for {symbol}: {e}")
+        return pd.DataFrame()
     except Exception as e:
         logging.error(f"Error fetching news for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()

@@ -24,6 +24,7 @@ from dags.etl_modules.fetcher import (
     fetch_income_stmt,
     fetch_news,
     fetch_stock_price,
+    get_active_vn_tickers,
 )
 
 # ============================================================================
@@ -537,3 +538,34 @@ class TestFetchNews:
 
         result = fetch_news("HPG")
         assert result.empty
+
+    @patch("dags.etl_modules.fetcher.Company")
+    def test_news_rate_limit_system_exit_returns_empty(self, mock_company_class):
+        """SystemExit (vnstock rate limit) should be handled gracefully."""
+        mock_company_class.side_effect = SystemExit("Rate limit exceeded")
+
+        result = fetch_news("HPG")
+        assert result.empty
+
+
+@pytest.mark.unit
+class TestGetActiveVnTickers:
+    """Unit tests for get_active_vn_tickers ticker filtering."""
+
+    @patch("dags.etl_modules.fetcher.create_client")
+    def test_filters_non_equity_symbols_and_deduplicates(self, mock_create_client):
+        mock_client = Mock()
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+            {"symbol": "hpg"},
+            {"symbol": "VCB"},
+            {"symbol": "41B5G3000"},
+            {"symbol": " VCB "},
+            {"symbol": "VN30F1M"},
+            {"symbol": None},
+            {"symbol": "A32"},
+        ]
+        mock_create_client.return_value = mock_client
+
+        result = get_active_vn_tickers()
+
+        assert result == ["HPG", "VCB"]
