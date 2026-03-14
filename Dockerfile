@@ -22,9 +22,8 @@ USER airflow
 
 
 
-# Copy dependency files
-
-COPY services/data-pipeline/pyproject.toml services/data-pipeline/uv.lock /opt/airflow/ 
+# Copy dependency files (paths are relative to services/data-pipeline build context)
+COPY pyproject.toml uv.lock /opt/airflow/
 
 
 
