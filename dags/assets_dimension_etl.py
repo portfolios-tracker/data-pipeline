@@ -153,6 +153,27 @@ def upsert_assets_records(records: list[dict]) -> int:
     return len(records)
 
 
+def delete_vn_non_stock_assets(symbols: list[str]) -> int:
+    """Delete legacy VN assets that were previously misclassified as STOCK."""
+    if not symbols:
+        return 0
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM public.assets
+                WHERE market = 'VN'
+                  AND asset_class = 'STOCK'
+                  AND source = 'vnstock'
+                  AND symbol = ANY(%s)
+                """,
+                (symbols,),
+            )
+            deleted = cur.rowcount
+    return deleted
+
+
 def fetch_vn_stocks(**context):
     """
     Fetch VN stocks from vnstock
@@ -167,6 +188,26 @@ def fetch_vn_stocks(**context):
     # Get all stocks
     df_list = listing.symbols_by_exchange()
     df_list = df_list[df_list["exchange"].str.upper() != "DELISTED"]
+    non_stock_symbols: list[str] = []
+    if "type" in df_list.columns:
+        # Extract symbols where provider type is not STOCK (e.g. futures/derivatives).
+        non_stock_symbols = (
+            df_list[df_list["type"].astype(str).str.upper() != "STOCK"]["symbol"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        before_type_filter = len(df_list)
+        df_list = df_list[df_list["type"].astype(str).str.upper() == "STOCK"]
+        logger.info(
+            "Filtered %s non-stock VN instruments based on vnstock type column",
+            before_type_filter - len(df_list),
+        )
+    else:
+        logger.warning(
+            "vnstock symbols_by_exchange() returned no type column; cannot filter derivatives explicitly"
+        )
 
     logger.info(f"Found {len(df_list)} active VN stocks")
 
@@ -222,6 +263,12 @@ def fetch_vn_stocks(**context):
         )
 
     upserted = upsert_assets_records(records)
+    deleted = delete_vn_non_stock_assets(non_stock_symbols)
+    if deleted:
+        logger.info(
+            "🧹 Deleted %s legacy VN rows misclassified as STOCK (source=vnstock)",
+            deleted,
+        )
     logger.info(f"✅ Upserted {upserted} VN stocks (asset_class=STOCK, market=VN)")
     return upserted
 

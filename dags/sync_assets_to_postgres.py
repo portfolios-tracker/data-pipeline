@@ -8,7 +8,7 @@ After Supabase-first migration, ``assets_dimension_etl`` writes directly to
 Supabase, so this DAG is intentionally a no-op and retained temporarily to
 avoid scheduler/registry churn during rollout.
 
-Schedule: Nightly 3 AM
+Schedule: Disabled (legacy compatibility DAG only)
 """
 
 from airflow import DAG
@@ -31,7 +31,7 @@ dag = DAG(
     "sync_assets_to_postgres",
     default_args=default_args,
     description="Deprecated no-op: assets now write directly to Supabase",
-    schedule="0 3 * * *",  # Daily 3 AM
+    schedule=None,  # Disabled: replaced by assets_dimension_etl
     catchup=False,
     tags=["assets", "sync", "deprecated", "supabase"],
 )

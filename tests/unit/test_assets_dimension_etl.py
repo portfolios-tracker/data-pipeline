@@ -8,7 +8,82 @@ Tests cover:
 
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
+
+
+@pytest.mark.unit
+class TestFetchVnStocks:
+    """Unit tests for fetch_vn_stocks type-based classification."""
+
+    @patch("dags.assets_dimension_etl.delete_vn_non_stock_assets")
+    @patch("dags.assets_dimension_etl.upsert_assets_records")
+    @patch("vnstock.Listing")
+    def test_only_stock_type_is_upserted(
+        self, mock_listing_class, mock_upsert_assets, mock_delete_non_stock
+    ):
+        from dags.assets_dimension_etl import fetch_vn_stocks
+
+        mock_listing = MagicMock()
+        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG", "41I1G4000"],
+                "organ_name": ["Hoa Phat Group", "VN30 Index Futures 042026"],
+                "exchange": ["HOSE", "HNX"],
+                "type": ["STOCK", "FU"],
+            }
+        )
+        mock_listing.symbols_by_industries.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG"],
+                "icb_name2": ["Materials"],
+                "icb_name3": ["Steel"],
+            }
+        )
+        mock_listing_class.return_value = mock_listing
+
+        captured_records = []
+
+        def capture_upsert(records):
+            captured_records.extend(records)
+            return len(records)
+
+        mock_upsert_assets.side_effect = capture_upsert
+        mock_delete_non_stock.return_value = 1
+
+        result = fetch_vn_stocks()
+
+        assert result == 1
+        assert len(captured_records) == 1
+        assert captured_records[0]["symbol"] == "HPG"
+        assert captured_records[0]["asset_class"] == "STOCK"
+        mock_delete_non_stock.assert_called_once_with(["41I1G4000"])
+
+    @patch("dags.assets_dimension_etl.delete_vn_non_stock_assets")
+    @patch("dags.assets_dimension_etl.upsert_assets_records")
+    @patch("vnstock.Listing")
+    def test_keeps_symbols_when_type_column_absent(
+        self, mock_listing_class, mock_upsert_assets, mock_delete_non_stock
+    ):
+        from dags.assets_dimension_etl import fetch_vn_stocks
+
+        mock_listing = MagicMock()
+        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG", "VCB"],
+                "organ_name": ["Hoa Phat Group", "Vietcombank"],
+                "exchange": ["HOSE", "HOSE"],
+            }
+        )
+        mock_listing.symbols_by_industries.side_effect = Exception("industry unavailable")
+        mock_listing_class.return_value = mock_listing
+
+        mock_upsert_assets.side_effect = lambda records: len(records)
+        mock_delete_non_stock.return_value = 0
+
+        result = fetch_vn_stocks()
+        assert result == 2
+        mock_delete_non_stock.assert_called_once_with([])
 
 
 @pytest.mark.unit

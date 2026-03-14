@@ -553,7 +553,7 @@ class TestGetActiveVnTickers:
     """Unit tests for get_active_vn_tickers ticker filtering."""
 
     @patch("dags.etl_modules.fetcher.create_client")
-    def test_filters_non_equity_symbols_and_deduplicates(self, mock_create_client):
+    def test_normalizes_symbols_and_deduplicates(self, mock_create_client):
         mock_client = Mock()
         mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
             {"symbol": "hpg"},
@@ -562,10 +562,12 @@ class TestGetActiveVnTickers:
             {"symbol": " VCB "},
             {"symbol": "VN30F1M"},
             {"symbol": None},
+            {"symbol": ""},
+            {"symbol": "   "},
             {"symbol": "A32"},
         ]
         mock_create_client.return_value = mock_client
 
         result = get_active_vn_tickers()
 
-        assert result == ["HPG", "VCB"]
+        assert result == ["HPG", "VCB", "41B5G3000", "VN30F1M", "A32"]

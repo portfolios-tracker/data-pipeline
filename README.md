@@ -36,7 +36,7 @@ graph LR
 | `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests.   |
 | `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.         |
 | `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                         |
-| `sync_assets_to_postgres`     | Daily (3 AM)       | Epic 9.1 – Asset Sync                      | Deprecated no-op retained temporarily to avoid scheduler churn during migration. |
+| `sync_assets_to_postgres`     | Disabled           | Epic 9.1 – Asset Sync                      | Deprecated no-op compatibility DAG; `assets_dimension_etl` is the active sync path. |
 | `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Agentic Portfolio Creation – AI Embeddings | Ingests VN company profiles and upserts Gemini embeddings to pgvector.           |
 
 ### `market_news_morning` — Scope Decision
