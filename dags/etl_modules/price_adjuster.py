@@ -59,12 +59,18 @@ def calculate_adjusted_prices(
         logger.warning("calculate_adjusted_prices: empty raw_prices for %s", ticker)
         return pd.DataFrame(
             columns=[
-                "ticker", "trading_date",
-                "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
+                "ticker",
+                "trading_date",
+                "adjusted_close",
+                "adjusted_volume",
+                "raw_close",
+                "adj_factor",
             ]
         )
 
-    df = raw_prices[[c for c in ["trading_date", "close", "volume"] if c in raw_prices.columns]].copy()
+    df = raw_prices[
+        [c for c in ["trading_date", "close", "volume"] if c in raw_prices.columns]
+    ].copy()
     df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
     df = df.sort_values("trading_date").reset_index(drop=True)
 
@@ -74,15 +80,23 @@ def calculate_adjusted_prices(
     df["raw_close"] = df["close"].astype(float)
     df["cumulative_factor"] = 1.0
     # adjusted_volume initialised from source; inverse-adjusted for stock splits only
-    df["adjusted_volume"] = df["volume"].astype(float) if "volume" in df.columns else 0.0
+    df["adjusted_volume"] = (
+        df["volume"].astype(float) if "volume" in df.columns else 0.0
+    )
 
     if dividends.empty:
         df["ticker"] = ticker
         df["adj_factor"] = df["cumulative_factor"]
-        return df[[
-            "ticker", "trading_date",
-            "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
-        ]]
+        return df[
+            [
+                "ticker",
+                "trading_date",
+                "adjusted_close",
+                "adjusted_volume",
+                "raw_close",
+                "adj_factor",
+            ]
+        ]
 
     # Sort corporate actions in DESCENDING order: most recent first.
     # Backward adjustment must process events from newest to oldest so that
@@ -105,13 +119,19 @@ def calculate_adjusted_prices(
         price_on_ex = df.loc[price_mask, "adjusted_close"]
         if price_on_ex.empty:
             logger.debug(
-                "No price data on ex-date %s for %s — skipping this event", ex_date, ticker
+                "No price data on ex-date %s for %s — skipping this event",
+                ex_date,
+                ticker,
             )
             continue
 
         p = float(price_on_ex.iloc[0])
         if p <= 0:
-            logger.warning("Zero or negative price on ex-date %s for %s — skipping", ex_date, ticker)
+            logger.warning(
+                "Zero or negative price on ex-date %s for %s — skipping",
+                ex_date,
+                ticker,
+            )
             continue
 
         # --- Cash dividend factor ---
@@ -127,7 +147,10 @@ def calculate_adjusted_prices(
         combined_factor = cash_factor * split_factor
         if combined_factor <= 0:
             logger.warning(
-                "Combined factor %.6f <= 0 for %s on %s — skipping", combined_factor, ticker, ex_date
+                "Combined factor %.6f <= 0 for %s on %s — skipping",
+                combined_factor,
+                ticker,
+                ex_date,
             )
             continue
 
@@ -144,7 +167,13 @@ def calculate_adjusted_prices(
 
     df["ticker"] = ticker
     df["adj_factor"] = df["cumulative_factor"]
-    return df[[
-        "ticker", "trading_date",
-        "adjusted_close", "adjusted_volume", "raw_close", "adj_factor",
-    ]]
+    return df[
+        [
+            "ticker",
+            "trading_date",
+            "adjusted_close",
+            "adjusted_volume",
+            "raw_close",
+            "adj_factor",
+        ]
+    ]

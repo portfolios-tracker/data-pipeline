@@ -119,7 +119,9 @@ with DAG(
 
             rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
             present_cols = [c for c in cols if c in df.columns]
-            updatable_cols = [c for c in present_cols if c not in {"ticker", "trading_date"}]
+            updatable_cols = [
+                c for c in present_cols if c not in {"ticker", "trading_date"}
+            ]
             conflict_set_sql = ",\n                            ".join(
                 [f"{col} = EXCLUDED.{col}" for col in updatable_cols]
                 + ["ingested_at = NOW()"]
@@ -177,7 +179,9 @@ with DAG(
                         print(f"No price data for {ticker} — skipping adjustment")
                         continue
 
-                    raw_prices = pd.DataFrame(price_rows, columns=["trading_date", "close", "volume"])
+                    raw_prices = pd.DataFrame(
+                        price_rows, columns=["trading_date", "close", "volume"]
+                    )
 
                     # --- Dividends ---
                     if ticker == VNINDEX_SYMBOL:
@@ -210,7 +214,9 @@ with DAG(
                             ],
                         )
 
-                    adjusted_df = calculate_adjusted_prices(raw_prices, dividends, ticker)
+                    adjusted_df = calculate_adjusted_prices(
+                        raw_prices, dividends, ticker
+                    )
                     if not adjusted_df.empty:
                         all_rows.extend(adjusted_df.to_dict(orient="records"))
         finally:
@@ -242,8 +248,16 @@ with DAG(
         df["raw_close"] = df["raw_close"].astype(float)
 
         insert_rows = list(
-            df[["ticker", "trading_date", "adj_factor", "adjusted_close", "adjusted_volume", "raw_close"]]
-            .itertuples(index=False, name=None)
+            df[
+                [
+                    "ticker",
+                    "trading_date",
+                    "adj_factor",
+                    "adjusted_close",
+                    "adjusted_volume",
+                    "raw_close",
+                ]
+            ].itertuples(index=False, name=None)
         )
 
         try:
