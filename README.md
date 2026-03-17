@@ -2,6 +2,20 @@
 
 The **Data Pipeline** service is the institutional-grade ETL engine of the Portfolios Tracker platform. Built with **Apache Airflow**, it handles automated data ingestion, normalization, and Supabase-first market-data loading for multi-asset intelligence.
 
+## Repository Scope
+
+- Owns Airflow DAG scheduling and ETL execution.
+- Integrates with the core NestJS API through protected batch endpoints.
+- Writes market and enrichment data into Supabase.
+
+Operational docs:
+
+- [Quick Start](./docs/QUICK-START.md)
+- [Deployment](./docs/DEPLOYMENT.md)
+- [Integrations](./docs/INTEGRATIONS.md)
+- [DAG Ownership](./docs/DAG-OWNERSHIP.md)
+- [Troubleshooting](./docs/TROUBLESHOOTING.md)
+
 ## 🏗️ Architecture
 
 The pipeline follows a modular ETL/ELT architecture:

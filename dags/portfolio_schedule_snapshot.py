@@ -10,7 +10,7 @@ This DAG calls the NestJS API's batch snapshot endpoint which:
 3. Returns immediately with job status
 
 Architecture Notes:
-- The scheduling responsibility is with Airflow (as per architecture.md)
+- The scheduling responsibility is with Airflow (see docs in this repository)
 - The business logic (iteration, snapshot capture) stays in NestJS
 - The API returns 202 Accepted immediately to avoid Airflow timeouts
 - Market-session filtering is NOT applied at DAG level in this phase

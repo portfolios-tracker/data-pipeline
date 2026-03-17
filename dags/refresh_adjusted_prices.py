@@ -1,5 +1,5 @@
 """
-services/data-pipeline/dags/refresh_adjusted_prices.py
+data-pipeline/dags/refresh_adjusted_prices.py
 
 Airflow DAG: refresh_adjusted_prices
 

@@ -1,5 +1,5 @@
 """
-services/data-pipeline/tests/unit/test_price_adjuster.py
+data-pipeline/tests/unit/test_price_adjuster.py
 
 Unit tests for the backward chain-linked price adjustment algorithm (Story 2.1).
 No ClickHouse connection -- all data is passed as in-memory DataFrames.

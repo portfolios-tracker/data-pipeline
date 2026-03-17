@@ -1,5 +1,5 @@
 """
-services/data-pipeline/dags/etl_modules/price_adjuster.py
+data-pipeline/dags/etl_modules/price_adjuster.py
 
 Backward chain-linked price adjustment algorithm for VN market stocks.
 
