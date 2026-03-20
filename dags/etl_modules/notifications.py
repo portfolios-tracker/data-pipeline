@@ -185,7 +185,7 @@ Please provide:
 
 Keep the summary concise, professional, and actionable for investors. Format using simple text, no markdown."""
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
     headers = {"Content-Type": "application/json", "X-goog-api-key": gemini_api_key}
 
     payload = {

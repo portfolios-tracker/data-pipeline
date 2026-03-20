@@ -129,4 +129,4 @@ def get_gemini_url():
     Returns:
         str: Full API URL
     """
-    return 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+    return 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
