@@ -112,7 +112,7 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         """
-                        INSERT INTO public.market_data_prices
+                        INSERT INTO market_data.market_data_prices
                             (trading_date, close, volume, ticker,
                              source)
                         VALUES %s
@@ -199,7 +199,7 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         """
-                        INSERT INTO public.market_data_financial_ratios
+                        INSERT INTO market_data.market_data_financial_ratios
                             (ticker, fiscal_date, year, quarter, pe_ratio, pb_ratio,
                              ps_ratio, p_cashflow_ratio, eps, bvps, market_cap, roe,
                              roa, roic, financial_leverage, dividend_yield,
@@ -309,7 +309,7 @@ with DAG(
                         psycopg2.extras.execute_values(
                             cur,
                             """
-                            INSERT INTO public.market_data_dividends
+                            INSERT INTO market_data.market_data_dividends
                                 (ticker, exercise_date, cash_year,
                                  cash_dividend_percentage, stock_dividend_percentage,
                                  issue_method)
@@ -354,7 +354,7 @@ with DAG(
                         psycopg2.extras.execute_values(
                             cur,
                             """
-                            INSERT INTO public.market_data_income_statements
+                            INSERT INTO market_data.market_data_income_statements
                                 (ticker, fiscal_date, year, quarter, revenue,
                                  cost_of_goods_sold, gross_profit, operating_profit,
                                  net_profit_post_tax)

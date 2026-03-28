@@ -16,7 +16,7 @@ _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
     """
-    Return active VN STOCK tickers from the Supabase ``assets`` table.
+    Return active VN STOCK tickers from the Supabase ``market_data.assets`` table.
 
     Falls back to a hardcoded seed list when Supabase is not reachable
     (e.g. during DAG file parsing on Airflow startup).
@@ -37,7 +37,7 @@ def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
             )
         client = create_client(url, key)
         response = (
-            client.table("assets")
+            client.table("market_data.assets")
             .select("symbol")
             .eq("asset_class", "STOCK")
             .eq("market", "VN")
@@ -57,25 +57,25 @@ def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
         # Treat an empty result set as a fallback condition as well
         if raise_on_fallback:
             raise RuntimeError(
-                "Supabase assets query returned zero active VN stock tickers "
+                "Supabase market_data.assets query returned zero active VN stock tickers "
                 "for market=VN and asset_class=STOCK. "
                 "Task will fail so Airflow can retry. "
                 "If this is persistent, check assets table contents and filters."
             )
         logging.warning(
-            "Supabase assets query returned zero active VN stock tickers, "
+            "Supabase market_data.assets query returned zero active VN stock tickers, "
             f"falling back to seed list of {len(_FALLBACK_VN_TICKERS)} tickers "
             "(partial ingestion risk)."
         )
     except Exception as e:
         if raise_on_fallback:
             raise RuntimeError(
-                f"Could not load active VN stock tickers from Supabase assets table: {e}. "
+                f"Could not load active VN stock tickers from Supabase market_data.assets table: {e}. "
                 "Task will fail so Airflow can retry. "
                 "If this is persistent, check Supabase connectivity and the assets table."
             ) from e
         logging.error(
-            f"Could not query assets table, falling back to seed list of "
+            f"Could not query market_data.assets table, falling back to seed list of "
             f"{len(_FALLBACK_VN_TICKERS)} tickers (partial ingestion risk): {e}"
         )
 
@@ -347,7 +347,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
 
     The index is treated as a zero-dividend synthetic asset:
     adjusted_close == raw_close (no corporate action adjustment needed).
-    Rows are stored in public.market_data_prices with source='vnstock_index'.
+    Rows are stored in market_data.market_data_prices with source='vnstock_index'.
 
     Parameters
     ----------

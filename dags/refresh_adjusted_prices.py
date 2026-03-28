@@ -8,7 +8,7 @@ Story 2.1 — Adjusted Market Data Pipeline
 Task flow:
   fetch_tickers  →  ingest_vnindex  →  calculate_adjusted  →  upsert_adjusted_prices
 
-Tickers source: Supabase public.assets WHERE asset_class='STOCK' AND market='VN'
+Tickers source: Supabase market_data.assets WHERE asset_class='STOCK' AND market='VN'
 Schedule: nightly at 18:30 Vietnam time (30 min after market_data_evening_batch at 18:00)
 """
 
@@ -63,7 +63,7 @@ with DAG(
     @task
     def fetch_tickers_with_dividends():
         """
-        Pull the full list of active VN stocks from Supabase assets table.
+        Pull the full list of active VN stocks from Supabase market_data.assets table.
         Returns a list of ticker symbol strings.
         """
         url = os.getenv("SUPABASE_URL")
@@ -74,7 +74,7 @@ with DAG(
             )
         client = create_client(url, key)
         response = (
-            client.table("assets")
+            client.table("market_data.assets")
             .select("symbol")
             .eq("asset_class", "STOCK")
             .eq("market", "VN")
@@ -132,7 +132,7 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         f"""
-                        INSERT INTO public.market_data_prices
+                        INSERT INTO market_data.market_data_prices
                             ({", ".join(present_cols)})
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
@@ -167,7 +167,7 @@ with DAG(
                     cur.execute(
                         """
                         SELECT trading_date::text, close::text, volume::text
-                        FROM public.market_data_prices
+                        FROM market_data.market_data_prices
                         WHERE ticker = %s
                           AND trading_date BETWEEN %s::date AND %s::date
                         ORDER BY trading_date
@@ -198,7 +198,7 @@ with DAG(
                             SELECT exercise_date::text,
                                    cash_dividend_percentage::text,
                                    stock_dividend_percentage::text
-                            FROM public.market_data_dividends
+                            FROM market_data.market_data_dividends
                             WHERE ticker = %s
                             ORDER BY exercise_date
                             """,
@@ -230,7 +230,7 @@ with DAG(
     @task
     def upsert_adjusted_prices(rows: list[dict]):
         """
-        Bulk-upsert the calculated adjusted prices into public.adjusted_price_daily.
+        Bulk-upsert the calculated adjusted prices into market_data.adjusted_price_daily.
         Uses ON CONFLICT DO UPDATE for idempotent writes.
         """
         if not rows:
@@ -266,7 +266,7 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         """
-                        INSERT INTO public.adjusted_price_daily
+                        INSERT INTO market_data.adjusted_price_daily
                             (ticker, trading_date, adj_factor, adjusted_close, adjusted_volume, raw_close)
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
@@ -278,7 +278,7 @@ with DAG(
                         """,
                         insert_rows,
                     )
-            print(f"Upserted {len(df)} rows into public.adjusted_price_daily")
+            print(f"Upserted {len(df)} rows into market_data.adjusted_price_daily")
         finally:
             conn.close()
 

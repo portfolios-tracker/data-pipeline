@@ -51,7 +51,7 @@ def _get_conn():
 
 
 def upsert_assets_records(records: list[dict]) -> int:
-    """Upsert asset records directly into public.assets using Supabase Postgres."""
+    """Upsert asset records directly into market_data.assets using Supabase Postgres."""
     if not records:
         return 0
 
@@ -104,7 +104,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                 psycopg2.extras.execute_values(
                     cur,
                     """
-                    INSERT INTO public.assets
+                    INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
                          exchange, sector, industry, logo_url, metadata, source)
                     VALUES %s
@@ -129,7 +129,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                 psycopg2.extras.execute_values(
                     cur,
                     """
-                    INSERT INTO public.assets
+                    INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
                          exchange, sector, industry, logo_url, metadata, source)
                     VALUES %s

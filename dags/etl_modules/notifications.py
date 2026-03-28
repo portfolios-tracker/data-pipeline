@@ -38,7 +38,7 @@ def get_latest_stock_data(tickers):
                             p.trading_date,
                             p.close,
                             p.volume
-                        FROM public.market_data_prices p
+                        FROM market_data.market_data_prices p
                         WHERE p.ticker = ANY(%s)
                         ORDER BY p.ticker, p.trading_date DESC
                     )
@@ -62,13 +62,13 @@ def get_latest_stock_data(tickers):
                     FROM latest_price lp
                     LEFT JOIN LATERAL (
                         SELECT p2.close
-                        FROM public.market_data_prices p2
+                        FROM market_data.market_data_prices p2
                         WHERE p2.ticker = lp.ticker
                           AND p2.trading_date < lp.trading_date
                         ORDER BY p2.trading_date DESC
                         OFFSET 19 LIMIT 1
                     ) p20 ON TRUE
-                    LEFT JOIN public.assets a
+                    LEFT JOIN market_data.assets a
                       ON a.symbol = lp.ticker
                      AND a.asset_class = 'STOCK'
                      AND a.market = 'VN'
@@ -80,7 +80,7 @@ def get_latest_stock_data(tickers):
                             fr.debt_to_equity,
                             fr.net_profit_margin,
                             fr.eps
-                        FROM public.market_data_financial_ratios fr
+                        FROM market_data.market_data_financial_ratios fr
                         WHERE fr.ticker = lp.ticker
                           AND fr.fiscal_date <= lp.trading_date
                         ORDER BY fr.fiscal_date DESC

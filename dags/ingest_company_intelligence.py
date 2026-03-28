@@ -67,16 +67,16 @@ def build_embedding_text(
 
 def fetch_company_profiles(**context):
     """
-    Task 1: Query active VN tickers from Supabase assets and fetch company profiles via vnstock.
+    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via vnstock.
 
     - Rate limited: 0.5s sleep between API calls
     - Logs progress every 50 tickers
     - Skips tickers where vnstock returns no data
     """
     supabase = get_supabase_client()
-    logger.info("Querying active VN tickers from Supabase assets...")
+    logger.info("Querying active VN tickers from Supabase market_data.assets...")
     response = (
-        supabase.table("assets")
+        supabase.table("market_data.assets")
         .select("symbol,exchange")
         .eq("asset_class", "STOCK")
         .eq("market", "VN")
@@ -215,7 +215,7 @@ def generate_and_upsert_embeddings(**context):
     for i in range(0, len(records), batch_size):
         batch = records[i : i + batch_size]
         try:
-            supabase.table("company_embeddings").upsert(
+            supabase.table("market_data.company_embeddings").upsert(
                 batch, ignore_duplicates=False, on_conflict="ticker_symbol,content_type"
             ).execute()
             total_upserted += len(batch)

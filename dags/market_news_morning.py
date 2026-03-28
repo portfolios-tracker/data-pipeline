@@ -101,7 +101,7 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         """
-                        INSERT INTO public.market_data_news
+                        INSERT INTO market_data.market_data_news
                             (ticker, publish_date, title, source, price_at_publish,
                              price_change, price_change_ratio, rsi, rs, news_id)
                         VALUES %s

@@ -42,10 +42,10 @@ def check_and_promote(**context):
     with psycopg2.connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                UPDATE assets
+                UPDATE market_data.assets
                 SET tracking_tier = 'pipeline_managed'
                 WHERE id IN (
-                    SELECT asset_id FROM asset_tracking_stats
+                    SELECT asset_id FROM market_data.asset_tracking_stats
                     WHERE user_count >= %s AND promotion_eligible = TRUE
                 )
                 AND tracking_tier = 'on_demand'
