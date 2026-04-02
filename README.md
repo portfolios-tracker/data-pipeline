@@ -43,14 +43,14 @@ graph LR
 
 ## 🚀 Key Workflows (DAGs)
 
-| DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                      |
-| :---------------------------- | :----------------- | :----------------------------------------- | :------------------------------------------------------------------------------- |
-| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) into Supabase.   |
-| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, ratios, dividends, and income statements.             |
-| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests.   |
-| `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.         |
-| `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                         |
-| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Agentic Portfolio Creation – AI Embeddings | Ingests VN company profiles and upserts Gemini embeddings to pgvector.           |
+| DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                    |
+| :---------------------------- | :----------------- | :----------------------------------------- | :----------------------------------------------------------------------------- |
+| `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) into Supabase. |
+| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, ratios, dividends, and income statements.           |
+| `refresh_adjusted_prices`     | Mon-Fri (6:30 PM)  | Epic 7 / Story 2.1                         | Rebuilds backward-adjusted close and volume series for total-return backtests. |
+| `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.       |
+| `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                       |
+| `ingest_company_intelligence` | Weekly (Sun 4 AM)  | Agentic Portfolio Creation – AI Embeddings | Ingests VN company profiles and upserts Gemini embeddings to pgvector.         |
 
 ### `market_news_morning` — Scope Decision
 
