@@ -125,7 +125,6 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
         # Now fetching full OHLCV
         required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
-        df["ticker"] = symbol
         df["asset_id"] = asset_id
         df["source"] = "vnstock"
     except Exception as e:
@@ -194,6 +193,17 @@ def fetch_financial_ratios(symbol, asset_id):
             "debt_to_equity": "Debt/Equity",
             "financial_leverage": "Financial Leverage",
             "dividend_yield": "Dividend yield",
+            "current_ratio": "Current Ratio",
+            "quick_ratio": "Quick Ratio",
+            "interest_coverage": "Interest Coverage",
+            "asset_turnover": "Asset Turnover",
+            "inventory_turnover": "Inventory Turnover",
+            "receivable_turnover": "Receivable Turnover",
+            "revenue_growth": "Revenue Growth",
+            "profit_growth": "Profit Growth",
+            "operating_margin": "Operating Margin",
+            "gross_margin": "Gross Margin",
+            "free_cash_flow": "Free Cash Flow",
         }
 
         for target, keyword in metric_map.items():
@@ -217,8 +227,6 @@ def fetch_financial_ratios(symbol, asset_id):
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
         out_df = clean_decimal_cols(out_df, list(metric_map.keys()))
 
-        # Add ticker and asset_id columns AFTER all other columns are set to ensure proper alignment
-        out_df["ticker"] = symbol
         out_df["asset_id"] = asset_id
 
         return out_df
@@ -250,15 +258,25 @@ def fetch_income_stmt(symbol, asset_id):
             "Gross Profit": "gross_profit",
             "Operating Profit/Loss": "operating_profit",
             "Net Profit For the Year": "net_profit_post_tax",
+            "Selling Expenses": "selling_expenses",
+            "Selling Expense": "selling_expenses",
+            "General & Admin": "admin_expenses",
+            "Admin Expense": "admin_expenses",
+            "General & Admin Expense": "admin_expenses",
+            "Financial Income": "financial_income",
+            "Financial Expense": "financial_expenses",
+            "Other Income": "other_income",
+            "Other Expense": "other_expenses",
+            "EBITDA": "ebitda"
         }
-        df.rename(columns=mapping, inplace=True)
+        
+        # Safe rename: only rename columns that exist
+        rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
+        df.rename(columns=rename_dict, inplace=True)
 
-        required_metrics = list(mapping.values())
+        # The required metrics are the unique values in the mapping dict
+        required_metrics = list(set(mapping.values()))
         df_final = df.copy()
-
-        # Ensure ticker
-        if "ticker" not in df_final.columns:
-            df_final["ticker"] = symbol
 
         # Handle Date
         if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
@@ -297,7 +315,7 @@ def fetch_income_stmt(symbol, asset_id):
         df_final["asset_id"] = asset_id
 
         # Select Final Columns
-        final_cols = ["ticker", "asset_id", "fiscal_date", "year", "quarter"] + required_metrics
+        final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
         return df_final[final_cols]
 
     except Exception as e:
@@ -306,46 +324,133 @@ def fetch_income_stmt(symbol, asset_id):
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
-def fetch_dividends(symbol, asset_id):
+def fetch_balance_sheet(symbol, asset_id):
     try:
-        company = Company(symbol=symbol, source="TCBS")
-        df = company.dividends()
+        finance = Finance(symbol=symbol, source="VCI")
+        try:
+            df = finance.balance_sheet(period="quarter", lang="en", dropna=True)
+        except AttributeError:
+            return pd.DataFrame()
+
         if df is None or df.empty:
             return pd.DataFrame()
 
-        df["ticker"] = symbol
-        df["asset_id"] = asset_id
-        if "exercise_date" in df.columns:
-            df["exercise_date"] = pd.to_datetime(df["exercise_date"]).dt.date
+        mapping = {
+            "Total Asset": "total_assets",
+            "Total Assets": "total_assets",
+            "Total Liabilities": "total_liabilities",
+            "Owner's Equity": "total_equity",
+            "Total Equity": "total_equity",
+            "Cash & Equivalents": "cash_and_equivalents",
+            "Cash and Cash Equivalents": "cash_and_equivalents",
+            "Short-term Asset": "short_term_assets",
+            "Short Term Assets": "short_term_assets",
+            "Long-term Asset": "long_term_assets",
+            "Long Term Assets": "long_term_assets",
+            "Short-term Liability": "short_term_liabilities",
+            "Short Term Liabilities": "short_term_liabilities",
+            "Long-term Liability": "long_term_liabilities",
+            "Long Term Liabilities": "long_term_liabilities",
+        }
+        
+        rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
+        df.rename(columns=rename_dict, inplace=True)
+        
+        required_metrics = list(set(mapping.values()))
+        df_final = df.copy()
+        
+        if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
+            df_final["year"] = df_final["yearReport"]
+            df_final["quarter"] = df_final["lengthReport"]
+            def make_date(row):
+                try:
+                    y = int(row["year"])
+                    q = int(row["quarter"])
+                    if q == 1: return f"{y}-03-31"
+                    if q == 2: return f"{y}-06-30"
+                    if q == 3: return f"{y}-09-30"
+                    if q == 4: return f"{y}-12-31"
+                except Exception:
+                    pass
+                return None
+            df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
 
-        required_cols = [
-            "ticker",
-            "asset_id",
-            "exercise_date",
-            "cash_year",
-            "cash_dividend_percentage",
-            "stock_dividend_percentage",
-            "issue_method",
-        ]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = 0 if "percentage" in col or "year" in col else None
-
-        df = clean_decimal_cols(
-            df, ["cash_dividend_percentage", "stock_dividend_percentage"]
-        )
-        return df[required_cols]
-    except ConnectionError as e:
-        # 404 errors are common - API may be unreliable or stock has no dividend data
-        if "404" in str(e) or "Not Found" in str(e):
-            logging.warning(
-                f"Dividend data not available for {symbol} (404 - Not Found)"
-            )
-        else:
-            logging.error(f"Connection error fetching dividends for {symbol}: {e}")
-        return pd.DataFrame()
+        df_final.dropna(subset=["year", "quarter", "fiscal_date"], inplace=True)
+        
+        for col in required_metrics:
+            if col not in df_final.columns:
+                df_final[col] = 0.0
+                
+        df_final = clean_decimal_cols(df_final, required_metrics)
+        df_final["asset_id"] = asset_id
+        
+        final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
+        return df_final[final_cols]
     except Exception as e:
-        logging.error(f"Error fetching dividends for {symbol}: {e}", exc_info=True)
+        logging.error(f"Error fetching balance sheet for {symbol}: {e}", exc_info=True)
+        return pd.DataFrame()
+
+
+@cached_data(ttl_seconds=86400)  # 24 hours
+def fetch_corporate_events(symbol, asset_id):
+    try:
+        company = Company(symbol=symbol, source="TCBS")
+        df = company.events()
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df_final = df.copy()
+        df_final["asset_id"] = asset_id
+        
+        mapping = {
+            "id": "event_id",
+            "en__event_title": "event_title",
+            "event_title": "event_title"
+        }
+        
+        # Only rename if column exists
+        for old_col, new_col in mapping.items():
+            if old_col in df_final.columns and new_col not in df_final.columns:
+                df_final.rename(columns={old_col: new_col}, inplace=True)
+        
+        date_mapping = {
+            "exerDate": "event_date",
+            "exerciseDate": "event_date",
+            "exrightDate": "exright_date",
+            "publicDate": "public_date",
+        }
+        for old_col, new_col in date_mapping.items():
+            if old_col in df_final.columns and new_col not in df_final.columns:
+                df_final.rename(columns={old_col: new_col}, inplace=True)
+
+        type_mapping = {
+            "eventCode": "event_type",
+            "eventType": "event_type",
+            "eventDesc": "event_description",
+        }
+        for old_col, new_col in type_mapping.items():
+            if old_col in df_final.columns and new_col not in df_final.columns:
+                df_final.rename(columns={old_col: new_col}, inplace=True)
+            
+        required_cols = ["asset_id", "event_id", "event_date", "public_date", "exright_date", "event_title", "event_type", "event_description"]
+        
+        for col in required_cols:
+            if col not in df_final.columns:
+                df_final[col] = None
+                
+        if "event_id" in df_final.columns:
+            df_final["event_id"] = df_final["event_id"].astype(str)
+            
+        for dcol in ["event_date", "public_date", "exright_date"]:
+            if dcol in df_final.columns:
+                df_final[dcol] = pd.to_datetime(df_final[dcol], errors='coerce').dt.date
+
+        return df_final[required_cols]
+    except Exception as e:
+        if "404" in str(e) or "Not Found" in str(e):
+            logging.warning(f"Events data not available for {symbol}")
+        else:
+            logging.error(f"Error fetching events for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
 
 
