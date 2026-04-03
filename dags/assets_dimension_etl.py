@@ -65,6 +65,7 @@ def upsert_assets_records(records: list[dict]) -> int:
         "exchange",
         "sector",
         "industry",
+        "industry_code",
         "logo_url",
         "metadata",
         "source",
@@ -82,6 +83,7 @@ def upsert_assets_records(records: list[dict]) -> int:
             rec.get("exchange") or None,
             rec.get("sector") or None,
             rec.get("industry") or None,
+            rec.get("industry_code") or None,
             rec.get("logo_url") or None,
             psycopg2.extras.Json(
                 rec.get("external_api_metadata") or rec.get("metadata") or {}
@@ -106,7 +108,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                     """
                     INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
-                         exchange, sector, industry, logo_url, metadata, source)
+                         exchange, sector, industry, industry_code, logo_url, metadata, source)
                     VALUES %s
                     ON CONFLICT (symbol, market, asset_class)
                     WHERE market IS NOT NULL
@@ -117,6 +119,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                         exchange = EXCLUDED.exchange,
                         sector = EXCLUDED.sector,
                         industry = EXCLUDED.industry,
+                        industry_code = EXCLUDED.industry_code,
                         logo_url = EXCLUDED.logo_url,
                         metadata = EXCLUDED.metadata,
                         source = EXCLUDED.source,
@@ -131,7 +134,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                     """
                     INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
-                         exchange, sector, industry, logo_url, metadata, source)
+                         exchange, sector, industry, industry_code, logo_url, metadata, source)
                     VALUES %s
                     ON CONFLICT (symbol, asset_class)
                     WHERE market IS NULL
@@ -142,6 +145,7 @@ def upsert_assets_records(records: list[dict]) -> int:
                         exchange = EXCLUDED.exchange,
                         sector = EXCLUDED.sector,
                         industry = EXCLUDED.industry,
+                        industry_code = EXCLUDED.industry_code,
                         logo_url = EXCLUDED.logo_url,
                         metadata = EXCLUDED.metadata,
                         source = EXCLUDED.source,
@@ -212,7 +216,7 @@ def fetch_vn_instruments(**context):
         df_ind = listing.symbols_by_industries()
         df = pd.merge(
             df_list[["symbol", "organ_name", "exchange", "type", "asset_class"]],
-            df_ind[["symbol", "icb_name2", "icb_name3"]],
+            df_ind[["symbol", "icb_name2", "icb_name3", "icb_code"]],
             on="symbol",
             how="left",
         )
@@ -222,6 +226,7 @@ def fetch_vn_instruments(**context):
         df = df_list[["symbol", "organ_name", "exchange", "type", "asset_class"]].copy()
         df["icb_name2"] = "Unknown"
         df["icb_name3"] = "Unknown"
+        df["icb_code"] = None
 
     # Transform to STI schema
     records = []
@@ -252,6 +257,9 @@ def fetch_vn_instruments(**context):
                 "industry": str(row["icb_name3"])
                 if pd.notna(row["icb_name3"])
                 else "Unknown",
+                "industry_code": str(row["icb_code"])
+                if pd.notna(row["icb_code"])
+                else None,
                 "logo_url": "",
                 "description": "",
                 "external_api_metadata": {

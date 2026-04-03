@@ -7,6 +7,7 @@ import psycopg2
 import psycopg2.extras
 import os
 import sys
+import re
 
 # Add dags directory to path so we can import etl_modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,6 +20,7 @@ from etl_modules.notifications import (
 )
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 default_args = {
     "owner": "data_engineer",
@@ -43,11 +45,14 @@ with DAG(
     @task
     def extract_news():
         news_data = []
-        tickers = get_active_vn_stock_tickers(raise_on_fallback=True)
-        print(f"Fetching daily news for {len(tickers)} tickers...")
+        # get_active_vn_stock_tickers returns list[dict] with {"symbol": "...", "asset_id": "..."}
+        tickers_info = get_active_vn_stock_tickers(raise_on_fallback=True)
+        print(f"Fetching daily news for {len(tickers_info)} tickers...")
 
-        for ticker in tickers:
-            df = fetch_news(ticker)
+        for info in tickers_info:
+            symbol = info["symbol"]
+            asset_id = info["asset_id"]
+            df = fetch_news(symbol, asset_id)
             if not df.empty:
                 news_data.append(df)
 
@@ -58,6 +63,98 @@ with DAG(
                 final_df["publish_date"] = final_df["publish_date"].astype(str)
             return final_df.to_dict("records")
         return []
+
+    @task
+    def score_news(data):
+        """Add sentiment score to each news record using Gemini with batching"""
+        if not data:
+            return []
+            
+        import logging
+        import json
+        from google import genai
+        from google.genai import errors, types
+
+        logger = logging.getLogger("airflow.task")
+        
+        if not GOOGLE_API_KEY:
+            logger.warning("GOOGLE_API_KEY not set. Skipping sentiment scoring.")
+            for row in data:
+                row["sentiment_score"] = 0.0
+            return data
+
+        try:
+            client = genai.Client(api_key=GOOGLE_API_KEY)
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini client: {e}")
+            raise
+
+        batch_size = 15
+        total_items = len(data)
+        logger.info(f"Scoring sentiment for {total_items} news items in batches of {batch_size}...")
+
+        for i in range(0, total_items, batch_size):
+            batch = data[i:i + batch_size]
+            
+            # Prepare batch prompt
+            items_text = ""
+            for idx, row in enumerate(batch):
+                title = row.get("title", "No Title")
+                desc = row.get("description", "")
+                items_text += f"ID: {idx}\nTitle: {title}\nContent: {desc}\n---\n"
+            
+            prompt = f"""
+            Analyze the sentiment of the following {len(batch)} financial news items for the Vietnamese stock market.
+            For each item, provide a sentiment score between -1.0 (extremely negative) and 1.0 (extremely positive). 
+            0.0 is neutral.
+            
+            Return the results as a JSON object with a key "scores" containing an array of objects, 
+            each with "id" (the ID provided in the prompt) and "score" (the numeric sentiment score).
+            
+            Items:
+            {items_text}
+            """
+            
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    )
+                )
+
+                try:
+                    # Robust cleaning of response.text to remove potential markdown blocks
+                    raw_text = response.text.strip()
+                    if raw_text.startswith("```"):
+                        # Extract JSON content from within code blocks
+                        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+                        if match:
+                            raw_text = match.group(0)
+
+                    result = json.loads(raw_text)
+                    scores_list = result.get("scores", [])
+                    scores_map = {item["id"]: item["score"] for item in scores_list if "id" in item and "score" in item}
+
+                    for idx, row in enumerate(batch):                        # Use string idx as key if JSON conversion made IDs strings
+                        score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
+                        row["sentiment_score"] = max(-1.0, min(1.0, float(score)))
+                except (json.JSONDecodeError, ValueError, KeyError) as e:
+                    logger.error(f"Failed to parse Gemini response for batch starting at {i}: {e}")
+                    logger.debug(f"Raw response: {response.text}")
+                    for row in batch:
+                        row["sentiment_score"] = 0.0
+                
+            except errors.APIError as e:
+                logger.error(f"Gemini API Error (batch starting at {i}): {e}")
+                # Re-raise to let Airflow handle retries or alerting
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error scoring batch starting at {i}: {e}")
+                raise
+            
+        return data
 
     @task
     def load_news(data):
@@ -71,24 +168,22 @@ with DAG(
         print("Connecting to Supabase/Postgres...")
         conn = psycopg2.connect(SUPABASE_DB_URL)
 
-        print(f"Inserting {len(data)} news rows...")
+        print(f"Inserting {len(data)} news rows into market_data.news...")
         cols = [
-            "ticker",
+            "asset_id",
             "publish_date",
             "title",
             "source",
             "price_at_publish",
             "price_change",
             "price_change_ratio",
-            "rsi",
-            "rs",
+            "sentiment_score",
             "news_id",
         ]
         tuples = []
         for row in data:
             # Convert publish_date back to datetime object
             if row.get("publish_date"):
-                # Handle potential different formats or just standard ISO
                 try:
                     row["publish_date"] = pd.to_datetime(row["publish_date"])
                 except Exception:
@@ -101,19 +196,18 @@ with DAG(
                     psycopg2.extras.execute_values(
                         cur,
                         """
-                        INSERT INTO market_data.market_data_news
-                            (ticker, publish_date, title, source, price_at_publish,
-                             price_change, price_change_ratio, rsi, rs, news_id)
+                        INSERT INTO market_data.news
+                            (asset_id, publish_date, title, source, price_at_publish,
+                             price_change, price_change_ratio, sentiment_score, news_id)
                         VALUES %s
-                        ON CONFLICT (ticker, news_id) DO UPDATE SET
+                        ON CONFLICT (asset_id, news_id) DO UPDATE SET
                             publish_date = EXCLUDED.publish_date,
                             title = EXCLUDED.title,
                             source = EXCLUDED.source,
                             price_at_publish = EXCLUDED.price_at_publish,
                             price_change = EXCLUDED.price_change,
                             price_change_ratio = EXCLUDED.price_change_ratio,
-                            rsi = EXCLUDED.rsi,
-                            rs = EXCLUDED.rs,
+                            sentiment_score = EXCLUDED.sentiment_score,
                             ingested_at = NOW()
                         """,
                         tuples,
@@ -133,6 +227,8 @@ with DAG(
             print("No news to send")
 
     # Orchestration
-    news_records = extract_news()
-    load_news(news_records)
-    send_news_digest(news_records)
+    raw_news = extract_news()
+    scored_news = score_news(raw_news)
+    load_news(scored_news)
+    send_news_digest(scored_news)
+

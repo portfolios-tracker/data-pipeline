@@ -525,6 +525,7 @@ def fetch_news(symbol, asset_id):
             return pd.DataFrame()
 
         df["ticker"] = symbol
+        df["asset_id"] = asset_id
 
         # Normalize column names between providers
         if "public_date" in df.columns:
