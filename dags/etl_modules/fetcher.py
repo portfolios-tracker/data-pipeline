@@ -14,7 +14,7 @@ from .cache import cached_data
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
-def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
+def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[dict[str, str]]:
     """
     Return active VN STOCK tickers from the Supabase ``market_data.assets`` table.
 
@@ -38,19 +38,23 @@ def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
         client = create_client(url, key)
         response = (
             client.table("market_data.assets")
-            .select("symbol")
+            .select("id, symbol")
             .eq("asset_class", "STOCK")
             .eq("market", "VN")
             .order("symbol")
             .execute()
         )
-        raw_tickers = [row["symbol"] for row in response.data if row.get("symbol")]
-        normalized_tickers: list[str] = []
-        for symbol in raw_tickers:
-            cleaned = str(symbol).strip().upper()
-            if cleaned:
-                normalized_tickers.append(cleaned)
-        tickers = list(dict.fromkeys(normalized_tickers))
+        
+        tickers = []
+        seen_symbols = set()
+        for row in response.data:
+            symbol = row.get("symbol")
+            if symbol:
+                cleaned = str(symbol).strip().upper()
+                if cleaned and cleaned not in seen_symbols:
+                    tickers.append({"symbol": cleaned, "asset_id": row["id"]})
+                    seen_symbols.add(cleaned)
+
         if tickers:
             logging.info(f"Loaded {len(tickers)} active VN tickers from assets table")
             return tickers
@@ -79,10 +83,10 @@ def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[str]:
             f"{len(_FALLBACK_VN_TICKERS)} tickers (partial ingestion risk): {e}"
         )
 
-    return list(_FALLBACK_VN_TICKERS)
+    return [{"symbol": t, "asset_id": "fallback"} for t in _FALLBACK_VN_TICKERS]
 
 
-def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[str]:
+def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[dict[str, str]]:
     """Backward-compatible alias for get_active_vn_stock_tickers()."""
     return get_active_vn_stock_tickers(raise_on_fallback=raise_on_fallback)
 
@@ -104,7 +108,7 @@ def clean_decimal_cols(df, cols):
 
 
 @cached_data(ttl_seconds=43200)  # 12 hours
-def fetch_stock_price(symbol, start_date, end_date):
+def fetch_stock_price(symbol, asset_id, start_date, end_date):
     logging.info(f"Attempting fetch for {symbol}...")
     df = pd.DataFrame()
     try:
@@ -122,6 +126,7 @@ def fetch_stock_price(symbol, start_date, end_date):
         required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
         df["ticker"] = symbol
+        df["asset_id"] = asset_id
         df["source"] = "vnstock"
     except Exception as e:
         logging.warning(f"VNSTOCK failed for {symbol}: {e}")
@@ -143,7 +148,7 @@ def fetch_stock_price(symbol, start_date, end_date):
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
-def fetch_financial_ratios(symbol):
+def fetch_financial_ratios(symbol, asset_id):
     logging.info(f"Fetching ratios for {symbol}...")
     try:
         finance = Finance(symbol=symbol, source="VCI")
@@ -212,8 +217,9 @@ def fetch_financial_ratios(symbol):
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
         out_df = clean_decimal_cols(out_df, list(metric_map.keys()))
 
-        # Add ticker column AFTER all other columns are set to ensure proper alignment
+        # Add ticker and asset_id columns AFTER all other columns are set to ensure proper alignment
         out_df["ticker"] = symbol
+        out_df["asset_id"] = asset_id
 
         return out_df
 
@@ -223,7 +229,7 @@ def fetch_financial_ratios(symbol):
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
-def fetch_income_stmt(symbol):
+def fetch_income_stmt(symbol, asset_id):
     """
     Fetches income statement.
     """
@@ -287,9 +293,11 @@ def fetch_income_stmt(symbol):
 
         # Clean Decimal Columns
         df_final = clean_decimal_cols(df_final, required_metrics)
+        
+        df_final["asset_id"] = asset_id
 
         # Select Final Columns
-        final_cols = ["ticker", "fiscal_date", "year", "quarter"] + required_metrics
+        final_cols = ["ticker", "asset_id", "fiscal_date", "year", "quarter"] + required_metrics
         return df_final[final_cols]
 
     except Exception as e:
@@ -298,7 +306,7 @@ def fetch_income_stmt(symbol):
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
-def fetch_dividends(symbol):
+def fetch_dividends(symbol, asset_id):
     try:
         company = Company(symbol=symbol, source="TCBS")
         df = company.dividends()
@@ -306,11 +314,13 @@ def fetch_dividends(symbol):
             return pd.DataFrame()
 
         df["ticker"] = symbol
+        df["asset_id"] = asset_id
         if "exercise_date" in df.columns:
             df["exercise_date"] = pd.to_datetime(df["exercise_date"]).dt.date
 
         required_cols = [
             "ticker",
+            "asset_id",
             "exercise_date",
             "cash_year",
             "cash_dividend_percentage",
@@ -340,7 +350,7 @@ def fetch_dividends(symbol):
 
 
 @cached_data(ttl_seconds=43200)  # 12 hours
-def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     Fetch historical prices for a VN index (e.g. VNINDEX, VN30, HNXINDEX)
     using vnstock's stock quote API with the VCI source.
@@ -401,7 +411,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
 
 
 @cached_data(ttl_seconds=3600)  # 1 hour
-def fetch_news(symbol):
+def fetch_news(symbol, asset_id):
     try:
         # TCBS public API has been deprecated; switch to VCI
         company = Company(symbol=symbol, source="VCI")
@@ -462,6 +472,7 @@ def fetch_news(symbol):
 
         required_cols = [
             "ticker",
+            "asset_id",
             "publish_date",
             "title",
             "source",
@@ -488,3 +499,4 @@ def fetch_news(symbol):
     except Exception as e:
         logging.error(f"Error fetching news for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
+

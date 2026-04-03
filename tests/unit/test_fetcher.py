@@ -134,7 +134,7 @@ class TestFetchStockPrice:
         mock_quote_class.return_value = mock_quote
 
         # Execute
-        result = fetch_stock_price("HPG", "2024-01-01", "2024-01-10")
+        result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         # Assert
         assert not result.empty
@@ -150,7 +150,7 @@ class TestFetchStockPrice:
         mock_quote.history.return_value = pd.DataFrame()
         mock_quote_class.return_value = mock_quote
 
-        result = fetch_stock_price("INVALID", "2024-01-01", "2024-01-10")
+        result = fetch_stock_price("INVALID", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         assert result.empty
 
@@ -159,7 +159,7 @@ class TestFetchStockPrice:
         """Test that API exceptions are caught and return empty DataFrame."""
         mock_quote_class.side_effect = Exception("API Error")
 
-        result = fetch_stock_price("HPG", "2024-01-01", "2024-01-10")
+        result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         assert result.empty
 
@@ -181,7 +181,7 @@ class TestFetchStockPrice:
         mock_quote.history.return_value = mock_df
         mock_quote_class.return_value = mock_quote
 
-        result = fetch_stock_price("HPG", "2024-01-01", "2024-12-31")
+        result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-12-31")
 
         # TA columns should not be present (stripped in Phase 2 cleanup)
         for col in ["ma_50", "ma_200", "rsi_14", "macd", "macd_signal", "macd_hist", "daily_return"]:
@@ -201,7 +201,7 @@ class TestFetchStockPrice:
         mock_quote.history.return_value = mock_df
         mock_quote_class.return_value = mock_quote
 
-        result = fetch_stock_price("HPG", "2024-01-01", "2024-01-10")
+        result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         assert result["close"].isna().sum() == 0
         assert result["close"].iloc[1] == 0.0
@@ -220,7 +220,7 @@ class TestFetchStockPrice:
         mock_quote.history.return_value = mock_df
         mock_quote_class.return_value = mock_quote
 
-        result = fetch_stock_price("HPG", "2024-01-01", "2024-01-05")
+        result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-05")
 
         # Check that trading_date is date type, not datetime
         assert isinstance(result["trading_date"].iloc[0], date)
@@ -257,7 +257,7 @@ class TestFetchFinancialRatios:
         mock_finance.ratio.return_value = mock_df
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_financial_ratios("HPG")
+        result = fetch_financial_ratios("HPG", "dummy_asset_id")
 
         assert not result.empty
         assert "ticker" in result.columns
@@ -271,7 +271,7 @@ class TestFetchFinancialRatios:
         mock_finance.ratio.return_value = pd.DataFrame()
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_financial_ratios("INVALID")
+        result = fetch_financial_ratios("INVALID", "dummy_asset_id")
 
         assert result.empty
 
@@ -292,7 +292,7 @@ class TestFetchFinancialRatios:
         mock_finance.ratio.return_value = mock_df
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_financial_ratios("HPG")
+        result = fetch_financial_ratios("HPG", "dummy_asset_id")
 
         assert "pe_ratio" in result.columns
         assert "roe" in result.columns
@@ -351,7 +351,7 @@ class TestFetchIncomeStmt:
         mock_finance.income_statement.return_value = df
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_income_stmt("HPG")
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
 
         assert not result.empty
         assert set(
@@ -386,7 +386,7 @@ class TestFetchIncomeStmt:
         mock_finance.income_statement.return_value = df
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_income_stmt("HPG")
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
 
         assert not result.empty
         assert result["operating_profit"].iloc[0] == 0.0
@@ -398,7 +398,7 @@ class TestFetchIncomeStmt:
         mock_finance.income_statement.return_value = pd.DataFrame()
         mock_finance_class.return_value = mock_finance
 
-        result = fetch_income_stmt("HPG")
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
         assert result.empty
 
 
@@ -421,7 +421,7 @@ class TestFetchDividends:
         mock_company.dividends.return_value = df
         mock_company_class.return_value = mock_company
 
-        result = fetch_dividends("HPG")
+        result = fetch_dividends("HPG", "dummy_asset_id")
 
         assert not result.empty
         assert set(
@@ -448,7 +448,7 @@ class TestFetchDividends:
         mock_company.dividends.return_value = df
         mock_company_class.return_value = mock_company
 
-        result = fetch_dividends("HPG")
+        result = fetch_dividends("HPG", "dummy_asset_id")
         assert not result.empty
         assert result["cash_year"].iloc[0] == 0
         assert result["cash_dividend_percentage"].iloc[0] == 0.0
@@ -460,7 +460,7 @@ class TestFetchDividends:
         mock_company.dividends.return_value = pd.DataFrame()
         mock_company_class.return_value = mock_company
 
-        result = fetch_dividends("HPG")
+        result = fetch_dividends("HPG", "dummy_asset_id")
         assert result.empty
 
 
@@ -487,7 +487,7 @@ class TestFetchNews:
         mock_company.news.return_value = df
         mock_company_class.return_value = mock_company
 
-        result = fetch_news("HPG")
+        result = fetch_news("HPG", "dummy_asset_id")
 
         assert not result.empty
         assert set(
@@ -524,7 +524,7 @@ class TestFetchNews:
         mock_company.news.return_value = df
         mock_company_class.return_value = mock_company
 
-        result = fetch_news("HPG")
+        result = fetch_news("HPG", "dummy_asset_id")
         assert not result.empty
         assert result["price_at_publish"].iloc[0] == 0.0
         # Default for non-price/rs fields is None per implementation
@@ -536,7 +536,7 @@ class TestFetchNews:
         mock_company.news.return_value = pd.DataFrame()
         mock_company_class.return_value = mock_company
 
-        result = fetch_news("HPG")
+        result = fetch_news("HPG", "dummy_asset_id")
         assert result.empty
 
     @patch("dags.etl_modules.fetcher.Company")
@@ -544,7 +544,7 @@ class TestFetchNews:
         """SystemExit (vnstock rate limit) should be handled gracefully."""
         mock_company_class.side_effect = SystemExit("Rate limit exceeded")
 
-        result = fetch_news("HPG")
+        result = fetch_news("HPG", "dummy_asset_id")
         assert result.empty
 
 
