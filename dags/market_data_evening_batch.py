@@ -91,6 +91,9 @@ with DAG(
 
         price_cols = [
             "trading_date",
+            "open",
+            "high",
+            "low",
             "close",
             "volume",
             "ticker",
@@ -113,10 +116,13 @@ with DAG(
                         cur,
                         """
                         INSERT INTO market_data.market_data_prices
-                            (trading_date, close, volume, ticker,
+                            (trading_date, open, high, low, close, volume, ticker,
                              source)
                         VALUES %s
                         ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            open          = EXCLUDED.open,
+                            high          = EXCLUDED.high,
+                            low           = EXCLUDED.low,
                             close         = EXCLUDED.close,
                             volume        = EXCLUDED.volume,
                             source        = EXCLUDED.source,
@@ -287,7 +293,7 @@ with DAG(
             # Load Dividends
             divs = data.get("dividends", [])
             if divs:
-                print(f"Upserting {len(divs)} dividend rows into market_data_dividends...")
+                print(f"Upserting {len(divs)} dividend rows into corporate_actions...")
                 div_cols = [
                     "ticker",
                     "exercise_date",
@@ -309,7 +315,7 @@ with DAG(
                         psycopg2.extras.execute_values(
                             cur,
                             """
-                            INSERT INTO market_data.market_data_dividends
+                            INSERT INTO market_data.corporate_actions
                                 (ticker, exercise_date, cash_year,
                                  cash_dividend_percentage, stock_dividend_percentage,
                                  issue_method)
