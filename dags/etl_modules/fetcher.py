@@ -118,8 +118,8 @@ def fetch_stock_price(symbol, start_date, end_date):
             columns={"time": "trading_date", "date": "trading_date"}, inplace=True
         )
 
-        # Builder/backtest consumers require close + volume; OHLC is out of scope.
-        required_cols = ["trading_date", "close", "volume"]
+        # Now fetching full OHLCV
+        required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
         df["ticker"] = symbol
         df["source"] = "vnstock"
@@ -387,7 +387,7 @@ def fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataF
         df["volume"] = df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
 
         required_cols = [
-            "ticker", "trading_date", "close", "volume",
+            "ticker", "trading_date", "open", "high", "low", "close", "volume",
             "source",
         ]
         for col in required_cols:
