@@ -1,12 +1,14 @@
-import pandas as pd
 import logging
 import os
-import numpy as np
-from supabase import create_client
-from vnstock import Quote, Finance, Company
 from urllib.parse import urlparse
-from .cache import cached_data
 
+import numpy as np
+import pandas as pd
+from vnstock import Company, Finance, Quote
+
+from supabase import create_client
+
+from .cache import cached_data
 
 # ---------------------------------------------------------------------------
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
@@ -14,7 +16,9 @@ from .cache import cached_data
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
-def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[dict[str, str]]:
+def get_active_vn_stock_tickers(
+    raise_on_fallback: bool = False,
+) -> list[dict[str, str]]:
     """
     Return active VN STOCK tickers from the Supabase ``market_data.assets`` table.
 
@@ -44,7 +48,7 @@ def get_active_vn_stock_tickers(raise_on_fallback: bool = False) -> list[dict[st
             .order("symbol")
             .execute()
         )
-        
+
         tickers = []
         seen_symbols = set()
         for row in response.data:
@@ -267,9 +271,9 @@ def fetch_income_stmt(symbol, asset_id):
             "Financial Expense": "financial_expenses",
             "Other Income": "other_income",
             "Other Expense": "other_expenses",
-            "EBITDA": "ebitda"
+            "EBITDA": "ebitda",
         }
-        
+
         # Safe rename: only rename columns that exist
         rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
         df.rename(columns=rename_dict, inplace=True)
@@ -311,7 +315,7 @@ def fetch_income_stmt(symbol, asset_id):
 
         # Clean Decimal Columns
         df_final = clean_decimal_cols(df_final, required_metrics)
-        
+
         df_final["asset_id"] = asset_id
 
         # Select Final Columns
@@ -352,38 +356,44 @@ def fetch_balance_sheet(symbol, asset_id):
             "Long-term Liability": "long_term_liabilities",
             "Long Term Liabilities": "long_term_liabilities",
         }
-        
+
         rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
         df.rename(columns=rename_dict, inplace=True)
-        
+
         required_metrics = list(set(mapping.values()))
         df_final = df.copy()
-        
+
         if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
             df_final["year"] = df_final["yearReport"]
             df_final["quarter"] = df_final["lengthReport"]
+
             def make_date(row):
                 try:
                     y = int(row["year"])
                     q = int(row["quarter"])
-                    if q == 1: return f"{y}-03-31"
-                    if q == 2: return f"{y}-06-30"
-                    if q == 3: return f"{y}-09-30"
-                    if q == 4: return f"{y}-12-31"
+                    if q == 1:
+                        return f"{y}-03-31"
+                    if q == 2:
+                        return f"{y}-06-30"
+                    if q == 3:
+                        return f"{y}-09-30"
+                    if q == 4:
+                        return f"{y}-12-31"
                 except Exception:
                     pass
                 return None
+
             df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
 
         df_final.dropna(subset=["year", "quarter", "fiscal_date"], inplace=True)
-        
+
         for col in required_metrics:
             if col not in df_final.columns:
                 df_final[col] = 0.0
-                
+
         df_final = clean_decimal_cols(df_final, required_metrics)
         df_final["asset_id"] = asset_id
-        
+
         final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
         return df_final[final_cols]
     except Exception as e:
@@ -394,25 +404,25 @@ def fetch_balance_sheet(symbol, asset_id):
 @cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_corporate_events(symbol, asset_id):
     try:
-        company = Company(symbol=symbol, source="TCBS")
+        company = Company(symbol=symbol, source="VCI")
         df = company.events()
         if df is None or df.empty:
             return pd.DataFrame()
 
         df_final = df.copy()
         df_final["asset_id"] = asset_id
-        
+
         mapping = {
             "id": "event_id",
             "en__event_title": "event_title",
-            "event_title": "event_title"
+            "event_title": "event_title",
         }
-        
+
         # Only rename if column exists
         for old_col, new_col in mapping.items():
             if old_col in df_final.columns and new_col not in df_final.columns:
                 df_final.rename(columns={old_col: new_col}, inplace=True)
-        
+
         date_mapping = {
             "exerDate": "event_date",
             "exerciseDate": "event_date",
@@ -431,19 +441,28 @@ def fetch_corporate_events(symbol, asset_id):
         for old_col, new_col in type_mapping.items():
             if old_col in df_final.columns and new_col not in df_final.columns:
                 df_final.rename(columns={old_col: new_col}, inplace=True)
-            
-        required_cols = ["asset_id", "event_id", "event_date", "public_date", "exright_date", "event_title", "event_type", "event_description"]
-        
+
+        required_cols = [
+            "asset_id",
+            "event_id",
+            "event_date",
+            "public_date",
+            "exright_date",
+            "event_title",
+            "event_type",
+            "event_description",
+        ]
+
         for col in required_cols:
             if col not in df_final.columns:
                 df_final[col] = None
-                
+
         if "event_id" in df_final.columns:
             df_final["event_id"] = df_final["event_id"].astype(str)
-            
+
         for dcol in ["event_date", "public_date", "exright_date"]:
             if dcol in df_final.columns:
-                df_final[dcol] = pd.to_datetime(df_final[dcol], errors='coerce').dt.date
+                df_final[dcol] = pd.to_datetime(df_final[dcol], errors="coerce").dt.date
 
         return df_final[required_cols]
     except Exception as e:
@@ -455,7 +474,9 @@ def fetch_corporate_events(symbol, asset_id):
 
 
 @cached_data(ttl_seconds=43200)  # 12 hours
-def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+def fetch_index_history(
+    symbol: str, asset_id: str, start_date: str, end_date: str
+) -> pd.DataFrame:
     """
     Fetch historical prices for a VN index (e.g. VNINDEX, VN30, HNXINDEX)
     using vnstock's stock quote API with the VCI source.
@@ -479,7 +500,9 @@ def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: s
         Columns matching market_data_prices schema with close/volume plus
         indicator columns set to 0.
     """
-    logging.info("Fetching index history for %s (%s → %s)", symbol, start_date, end_date)
+    logging.info(
+        "Fetching index history for %s (%s → %s)", symbol, start_date, end_date
+    )
     try:
         from vnstock import Vnstock
 
@@ -489,7 +512,9 @@ def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: s
             raise ValueError(f"Empty data returned for index {symbol}")
 
         df.columns = [c.lower() for c in df.columns]
-        df.rename(columns={"time": "trading_date", "date": "trading_date"}, inplace=True)
+        df.rename(
+            columns={"time": "trading_date", "date": "trading_date"}, inplace=True
+        )
 
         if not pd.api.types.is_datetime64_any_dtype(df["trading_date"]):
             df["trading_date"] = pd.to_datetime(df["trading_date"])
@@ -499,10 +524,18 @@ def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: s
         df["source"] = "vnstock_index"
 
         df = clean_decimal_cols(df, ["close"])
-        df["volume"] = df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        df["volume"] = (
+            df.get("volume", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        )
 
         required_cols = [
-            "ticker", "trading_date", "open", "high", "low", "close", "volume",
+            "ticker",
+            "trading_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
             "source",
         ]
         for col in required_cols:
@@ -511,14 +544,15 @@ def fetch_index_history(symbol: str, asset_id: str, start_date: str, end_date: s
         return df[required_cols]
 
     except Exception as e:
-        logging.error("Error fetching index history for %s: %s", symbol, e, exc_info=True)
+        logging.error(
+            "Error fetching index history for %s: %s", symbol, e, exc_info=True
+        )
         return pd.DataFrame()
 
 
 @cached_data(ttl_seconds=3600)  # 1 hour
 def fetch_news(symbol, asset_id):
     try:
-        # TCBS public API has been deprecated; switch to VCI
         company = Company(symbol=symbol, source="VCI")
         df = company.news(page_size=50)
         if df is None or df.empty:
@@ -557,7 +591,7 @@ def fetch_news(symbol, asset_id):
         if "source" not in df.columns and "news_source_link" in df.columns:
             try:
                 df["source"] = df["news_source_link"].apply(
-                    lambda x: (urlparse(x).netloc if isinstance(x, str) else None)
+                    lambda x: urlparse(x).netloc if isinstance(x, str) else None
                 )
             except Exception:
                 df["source"] = None
@@ -605,4 +639,3 @@ def fetch_news(symbol, asset_id):
     except Exception as e:
         logging.error(f"Error fetching news for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
-
