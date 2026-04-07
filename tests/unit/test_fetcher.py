@@ -16,7 +16,6 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 import pytest
-
 from dags.etl_modules.fetcher import (
     clean_decimal_cols,
     fetch_dividends,
@@ -150,7 +149,9 @@ class TestFetchStockPrice:
         mock_quote.history.return_value = pd.DataFrame()
         mock_quote_class.return_value = mock_quote
 
-        result = fetch_stock_price("INVALID", "dummy_asset_id", "2024-01-01", "2024-01-10")
+        result = fetch_stock_price(
+            "INVALID", "dummy_asset_id", "2024-01-01", "2024-01-10"
+        )
 
         assert result.empty
 
@@ -184,8 +185,18 @@ class TestFetchStockPrice:
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-12-31")
 
         # TA columns should not be present (stripped in Phase 2 cleanup)
-        for col in ["ma_50", "ma_200", "rsi_14", "macd", "macd_signal", "macd_hist", "daily_return"]:
-            assert col not in result.columns, f"Stale TA column '{col}' should not be in output"
+        for col in [
+            "ma_50",
+            "ma_200",
+            "rsi_14",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "daily_return",
+        ]:
+            assert col not in result.columns, (
+                f"Stale TA column '{col}' should not be in output"
+            )
 
     @patch("dags.etl_modules.fetcher.Quote")
     def test_nan_values_cleaned(self, mock_quote_class):
@@ -568,4 +579,8 @@ class TestGetActiveVnStockTickers:
 
         result = get_active_vn_stock_tickers()
 
-        assert result == ["HPG", "VCB", "FPT"]
+        assert result == [
+            {"symbol": "HPG", "asset_id": "fallback"},
+            {"symbol": "VCB", "asset_id": "fallback"},
+            {"symbol": "FPT", "asset_id": "fallback"},
+        ]

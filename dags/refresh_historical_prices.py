@@ -15,6 +15,10 @@ try:
         send_failure_notification,
         send_success_notification,
     )
+    from etl_modules.refresh_historical_trigger import (
+        ensure_corporate_events_table_exists,
+        fetch_tickers_for_refresh,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
         raise
@@ -23,9 +27,14 @@ except ModuleNotFoundError as exc:
         send_failure_notification,
         send_success_notification,
     )
+    from dags.etl_modules.refresh_historical_trigger import (
+        ensure_corporate_events_table_exists,
+        fetch_tickers_for_refresh,
+    )
 
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+CORPORATE_EVENTS_LOOKBACK_DAYS = int(os.getenv("CORPORATE_EVENTS_LOOKBACK_DAYS", "14"))
 
 default_args = {
     "owner": "data_engineer",
@@ -52,25 +61,25 @@ with DAG(
 
     @task
     def get_unprocessed_tickers():
-        print("Connecting to Supabase to find unprocessed corporate actions...")
+        print("Connecting to Supabase to find tickers that need historical refresh...")
         conn = psycopg2.connect(SUPABASE_DB_URL)
         tickers = []
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT DISTINCT ticker 
-                        FROM market_data.corporate_actions 
-                        WHERE processed_at IS NULL
-                        """
+                    ensure_corporate_events_table_exists(cur)
+                    print(
+                        "Using trigger source: market_data.corporate_events "
+                        f"(events lookback={CORPORATE_EVENTS_LOOKBACK_DAYS} days)"
                     )
-                    rows = cur.fetchall()
-                    tickers = [row[0] for row in rows]
+                    tickers = fetch_tickers_for_refresh(
+                        cur,
+                        events_lookback_days=CORPORATE_EVENTS_LOOKBACK_DAYS,
+                    )
         finally:
             conn.close()
 
-        print(f"Found {len(tickers)} tickers with unprocessed corporate actions.")
+        print(f"Found {len(tickers)} tickers needing historical refresh.")
         return tickers
 
     @task
@@ -87,6 +96,9 @@ with DAG(
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
+            with conn.cursor() as source_cur:
+                ensure_corporate_events_table_exists(source_cur)
+
             for ticker in tickers:
                 print(f"Processing {ticker}...")
                 df_price = fetch_stock_price(ticker, start_date, end_date)
@@ -135,16 +147,6 @@ with DAG(
                             rows,
                         )
 
-                        # Mark corporate actions as processed
-                        cur.execute(
-                            """
-                            UPDATE market_data.corporate_actions
-                            SET processed_at = NOW()
-                            WHERE ticker = %s AND processed_at IS NULL
-                            """,
-                            (ticker,),
-                        )
-                        print(f"Marked corporate actions for {ticker} as processed.")
         finally:
             conn.close()
 

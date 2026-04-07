@@ -61,7 +61,9 @@ def get_active_vn_stock_tickers(
             if symbol:
                 cleaned = str(symbol).strip().upper()
                 if cleaned and cleaned not in seen_symbols:
-                    tickers.append({"symbol": cleaned, "asset_id": row["id"]})
+                    tickers.append(
+                        {"symbol": cleaned, "asset_id": row.get("id", "fallback")}
+                    )
                     seen_symbols.add(cleaned)
 
         if tickers:
@@ -134,6 +136,7 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
         # Now fetching full OHLCV
         required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
         df = df[[c for c in required_cols if c in df.columns]]
+        df["ticker"] = symbol
         df["asset_id"] = asset_id
         df["source"] = "vnstock"
     except Exception as e:
@@ -236,6 +239,7 @@ def fetch_financial_ratios(symbol, asset_id):
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
         out_df = clean_decimal_cols(out_df, list(metric_map.keys()))
 
+        out_df["ticker"] = symbol
         out_df["asset_id"] = asset_id
 
         return out_df
@@ -321,10 +325,17 @@ def fetch_income_stmt(symbol, asset_id):
         # Clean Decimal Columns
         df_final = clean_decimal_cols(df_final, required_metrics)
 
+        df_final["ticker"] = symbol
         df_final["asset_id"] = asset_id
 
         # Select Final Columns
-        final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
+        final_cols = [
+            "ticker",
+            "asset_id",
+            "fiscal_date",
+            "year",
+            "quarter",
+        ] + required_metrics
         return df_final[final_cols]
 
     except Exception as e:
@@ -552,6 +563,59 @@ def fetch_index_history(
         logging.error(
             "Error fetching index history for %s: %s", symbol, e, exc_info=True
         )
+        return pd.DataFrame()
+
+
+@cached_data(ttl_seconds=3600)  # 1 hour
+def fetch_dividends(symbol, asset_id):
+    """Fetch dividend history and normalize to a stable schema."""
+    try:
+        company = Company(symbol=symbol, source="VCI")
+        df = company.dividends()
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.copy()
+        df["ticker"] = symbol
+        df["asset_id"] = asset_id
+
+        # Normalize commonly seen provider column variants.
+        rename_map = {
+            "exerciseDate": "exercise_date",
+            "exerDate": "exercise_date",
+            "cashYear": "cash_year",
+            "cashRate": "cash_dividend_percentage",
+            "stockRate": "stock_dividend_percentage",
+            "issueMethod": "issue_method",
+        }
+        for old_col, new_col in rename_map.items():
+            if old_col in df.columns and new_col not in df.columns:
+                df.rename(columns={old_col: new_col}, inplace=True)
+
+        required_cols = [
+            "ticker",
+            "exercise_date",
+            "cash_year",
+            "cash_dividend_percentage",
+            "stock_dividend_percentage",
+            "issue_method",
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = None
+
+        df["exercise_date"] = pd.to_datetime(
+            df["exercise_date"], errors="coerce"
+        ).dt.date
+        df["cash_year"] = pd.to_numeric(df["cash_year"], errors="coerce").fillna(0)
+        df["cash_year"] = df["cash_year"].astype(int)
+        df = clean_decimal_cols(
+            df, ["cash_dividend_percentage", "stock_dividend_percentage"]
+        )
+
+        return df[required_cols]
+    except Exception as e:
+        logging.error(f"Error fetching dividends for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
 
 
