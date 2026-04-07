@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 import logging
+import re
 from io import StringIO
 import psycopg2
 import psycopg2.extras
@@ -157,15 +158,32 @@ def upsert_assets_records(records: list[dict]) -> int:
     return len(records)
 
 
-def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
-    """Map vnstock VCI listing types to supported assets.asset_class values."""
-    normalized = str(vnstock_type or "STOCK").strip().upper()
+def _map_vnstock_type_to_asset_class(
+    vnstock_type: str | None,
+    symbol: str | None = None,
+    product_grp_id: str | None = None,
+    organ_name: str | None = None,
+) -> str:
+    """
+    Map vnstock listing metadata to supported assets.asset_class values.
+
+    Uses provider `type` first, then falls back to symbol/name/product-group
+    heuristics for rows where type is missing or inconsistent.
+    """
+    normalized = ""
+    if vnstock_type is not None and not pd.isna(vnstock_type):
+        normalized = str(vnstock_type).strip().upper()
+    symbol_upper = str(symbol or "").strip().upper()
+    product_group = str(product_grp_id or "").strip().upper()
+    name_upper = str(organ_name or "").strip().upper()
 
     direct_map = {
         "STOCK": "STOCK",
         "ETF": "ETF",
         "FUND": "FUND",
+        "UNIT_TRUST": "FUND",
         "BOND": "BOND",
+        "DEBENTURE": "BOND",
         "INDEX": "INDEX",
         # Tradable contracts with leverage/expiry are derivatives.
         "FU": "DERIVATIVE",
@@ -180,12 +198,40 @@ def _map_vnstock_type_to_asset_class(vnstock_type: str | None) -> str:
         return "DERIVATIVE"
     if "BOND" in normalized:
         return "BOND"
+    if product_group in {"FIO", "FBX"}:
+        return "DERIVATIVE"
+    if product_group == "HCX":
+        return "BOND"
+    if "CHỨNG QUYỀN" in name_upper:
+        return "DERIVATIVE"
+    if re.match(r"^\d+[A-Z]\d+G\d+$", symbol_upper):
+        return "DERIVATIVE"
+    if re.match(r"^C[A-Z]{3,}\d{2,}$", symbol_upper):
+        return "DERIVATIVE"
 
     logger.warning(
         "Unknown vnstock symbol type '%s'; defaulting asset_class to STOCK",
         normalized,
     )
     return "STOCK"
+
+
+def deactivate_stale_vn_stock_rows(non_stock_symbols: list[str]) -> int:
+    """
+    Placeholder hook for stale STOCK reclassification.
+
+    We intentionally avoid status mutation here because deployments may enforce
+    strict status check constraints. Downstream readers now filter out
+    non-equity symbols directly (metadata + symbol heuristics), which prevents
+    bad rows from entering stock-only pipelines without violating constraints.
+    """
+    if non_stock_symbols:
+        logger.info(
+            "Detected %s VN symbols classified as non-STOCK; stock readers will "
+            "exclude them via strict symbol-type filtering.",
+            len(non_stock_symbols),
+        )
+    return 0
 
 
 def fetch_vn_instruments(**context):
@@ -207,7 +253,15 @@ def fetch_vn_instruments(**context):
             "vnstock symbols_by_exchange() returned no type column; defaulting all VN instruments to STOCK"
         )
         df_list["type"] = "STOCK"
-    df_list["asset_class"] = df_list["type"].map(_map_vnstock_type_to_asset_class)
+    df_list["asset_class"] = df_list.apply(
+        lambda row: _map_vnstock_type_to_asset_class(
+            vnstock_type=row.get("type"),
+            symbol=row.get("symbol"),
+            product_grp_id=row.get("product_grp_id"),
+            organ_name=row.get("organ_name"),
+        ),
+        axis=1,
+    )
 
     logger.info(f"Found {len(df_list)} active VN instruments")
 
@@ -269,6 +323,20 @@ def fetch_vn_instruments(**context):
                 "source": "vnstock",
                 "is_active": 1,
             }
+        )
+
+    non_stock_symbols = sorted(
+        {
+            record["symbol"]
+            for record in records
+            if record.get("market") == "VN" and record.get("asset_class") != "STOCK"
+        }
+    )
+    deactivated = deactivate_stale_vn_stock_rows(non_stock_symbols)
+    if deactivated:
+        logger.info(
+            "Marked %s stale VN STOCK rows inactive due to reclassification.",
+            deactivated,
         )
 
     upserted = upsert_assets_records(records)

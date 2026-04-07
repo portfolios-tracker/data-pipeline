@@ -21,6 +21,20 @@ except ModuleNotFoundError as exc:
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 
 
+# Temporary guardrail intentionally disabled.
+# Keep this heuristic for quick rollback if provider metadata regresses.
+#
+# def _looks_like_non_equity_vn_symbol(symbol: str) -> bool:
+#     symbol = str(symbol or "").strip().upper()
+#     if not symbol:
+#         return False
+#     if re.match(r"^\d+[A-Z]\d+G\d+$", symbol):
+#         return True
+#     if re.match(r"^C[A-Z]{3,}\d{2,}$", symbol):
+#         return True
+#     return len(symbol) > 5 and any(ch.isdigit() for ch in symbol)
+
+
 def get_active_vn_stock_tickers(
     raise_on_fallback: bool = False,
 ) -> list[dict[str, str]]:
@@ -46,10 +60,12 @@ def get_active_vn_stock_tickers(
             )
         client = create_client(url, key)
         response = (
-            client.table("market_data.assets")
-            .select("id, symbol")
+            client.schema("market_data")
+            .table("assets")
+            .select("id, symbol, metadata")
             .eq("asset_class", "STOCK")
             .eq("market", "VN")
+            .eq("status", "active")
             .order("symbol")
             .execute()
         )
@@ -60,6 +76,13 @@ def get_active_vn_stock_tickers(
             symbol = row.get("symbol")
             if symbol:
                 cleaned = str(symbol).strip().upper()
+                metadata = row.get("metadata") or {}
+                symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
+                if symbol_type and symbol_type != "STOCK":
+                    continue
+                # Heuristic guardrail intentionally disabled:
+                # if not symbol_type and _looks_like_non_equity_vn_symbol(cleaned):
+                #     continue
                 if cleaned and cleaned not in seen_symbols:
                     tickers.append(
                         {"symbol": cleaned, "asset_id": row.get("id", "fallback")}
@@ -499,7 +522,7 @@ def fetch_index_history(
 
     The index is treated as a zero-dividend synthetic asset:
     adjusted_close == raw_close (no corporate action adjustment needed).
-    Rows are stored in market_data.market_data_prices with source='vnstock_index'.
+    Rows are stored in market_data.prices with source='vnstock_index'.
 
     Parameters
     ----------
@@ -513,7 +536,7 @@ def fetch_index_history(
     Returns
     -------
     pd.DataFrame
-        Columns matching market_data_prices schema with close/volume plus
+        Columns matching prices schema with close/volume plus
         indicator columns set to 0.
     """
     logging.info(

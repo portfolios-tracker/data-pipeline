@@ -29,19 +29,24 @@ class TestEnsureCorporateEventsTableExists:
 
 @pytest.mark.unit
 class TestFetchTickersForRefresh:
-    def test_queries_events_and_returns_distinct_tickers(self):
+    def test_queries_events_and_returns_assets_for_refresh(self):
         mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [("HPG",), ("VCB",)]
+        mock_cursor.fetchall.return_value = [("HPG", "asset-1"), ("VCB", "asset-2")]
 
         tickers = fetch_tickers_for_refresh(
             mock_cursor,
             events_lookback_days=14,
         )
 
-        assert tickers == ["HPG", "VCB"]
+        assert tickers == [
+            {"symbol": "HPG", "asset_id": "asset-1"},
+            {"symbol": "VCB", "asset_id": "asset-2"},
+        ]
         executed_sql = mock_cursor.execute.call_args[0][0]
         assert "FROM market_data.corporate_events ce" in executed_sql
         assert "JOIN market_data.assets a" in executed_sql
         assert "ON a.id = ce.asset_id" in executed_sql
-        assert "market_data.market_data_prices" in executed_sql
+        assert "FROM market_data.prices" in executed_sql
+        assert "GROUP BY asset_id" in executed_sql
+        assert "ON mp.asset_id = ce.asset_id" in executed_sql
         assert mock_cursor.execute.call_args[0][1] == (14,)

@@ -314,6 +314,25 @@ class TestGetLatestStockData:
         assert result == {}
 
     @patch("dags.etl_modules.notifications.psycopg2.connect")
+    def test_uses_normalized_supabase_table_names(
+        self, mock_connect, mock_environment_variables
+    ):
+        """Test query uses prices/financial_ratios tables after schema migration."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_connect.return_value.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+
+        get_latest_stock_data(["HPG"])
+
+        executed_sql = mock_cursor.execute.call_args[0][0]
+        assert "FROM market_data.prices" in executed_sql
+        assert "FROM market_data.financial_ratios" in executed_sql
+        assert "market_data.market_data_prices" not in executed_sql
+        assert "market_data.market_data_financial_ratios" not in executed_sql
+
+    @patch("dags.etl_modules.notifications.psycopg2.connect")
     def test_connection_error_handled(
         self, mock_connect, mock_environment_variables
     ):

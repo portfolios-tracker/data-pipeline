@@ -13,15 +13,29 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from google import genai
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
+from google import genai
 from vnstock import Company
 
 from supabase import Client, create_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Temporary guardrail intentionally disabled.
+# Keep this heuristic for quick rollback if provider metadata regresses.
+#
+# def _looks_like_non_equity_vn_symbol(symbol: str) -> bool:
+#     symbol = str(symbol or "").strip().upper()
+#     if not symbol:
+#         return False
+#     if re.match(r"^\d+[A-Z]\d+G\d+$", symbol):
+#         return True
+#     if re.match(r"^C[A-Z]{3,}\d{2,}$", symbol):
+#         return True
+#     return len(symbol) > 5 and any(ch.isdigit() for ch in symbol)
 
 default_args = {
     "owner": "data-pipeline",
@@ -39,6 +53,7 @@ dag = DAG(
     catchup=False,
     tags=["ai", "embeddings", "company", "supabase", "pgvector"],
 )
+
 
 def get_supabase_client() -> Client:
     """Create Supabase client with environment configuration."""
@@ -76,14 +91,28 @@ def fetch_company_profiles(**context):
     supabase = get_supabase_client()
     logger.info("Querying active VN tickers from Supabase market_data.assets...")
     response = (
-        supabase.table("market_data.assets")
-        .select("symbol,exchange")
+        supabase.schema("market_data")
+        .table("assets")
+        .select("symbol,exchange,metadata")
         .eq("asset_class", "STOCK")
         .eq("market", "VN")
+        .eq("status", "active")
         .order("symbol")
         .execute()
     )
-    tickers = [(row.get("symbol"), row.get("exchange") or "") for row in response.data if row.get("symbol")]
+    tickers = []
+    for row in response.data:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        metadata = row.get("metadata") or {}
+        symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
+        if symbol_type and symbol_type != "STOCK":
+            continue
+        # Heuristic guardrail intentionally disabled:
+        # if not symbol_type and _looks_like_non_equity_vn_symbol(symbol):
+        #     continue
+        tickers.append((symbol, row.get("exchange") or ""))
     logger.info(f"Found {len(tickers)} active VN tickers")
 
     profiles = []
@@ -237,7 +266,9 @@ def backfill_dim_assets_description(**context):
     The Supabase ``assets`` table does not store a ``description`` column, so
     there is no equivalent backfill action after ClickHouse retirement.
     """
-    logger.info("Skipping legacy description backfill: no description column in Supabase assets")
+    logger.info(
+        "Skipping legacy description backfill: no description column in Supabase assets"
+    )
     return 0
 
 

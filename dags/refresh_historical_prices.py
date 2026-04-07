@@ -49,7 +49,7 @@ default_args = {
 with DAG(
     "refresh_historical_prices",
     default_args=default_args,
-    description="Refreshes full historical prices (OHLCV) when new corporate actions are detected",
+    description="Refreshes full historical prices (OHLCV) when new corporate events are detected",
     schedule="30 11 * * *",  # 18:30 VN time (UTC+7)
     start_date=datetime(2025, 1, 1, tzinfo=timezone("UTC")),
     catchup=False,
@@ -61,9 +61,9 @@ with DAG(
 
     @task
     def get_unprocessed_tickers():
-        print("Connecting to Supabase to find tickers that need historical refresh...")
+        print("Connecting to Supabase to find assets that need historical refresh...")
         conn = psycopg2.connect(SUPABASE_DB_URL)
-        tickers = []
+        assets = []
         try:
             with conn:
                 with conn.cursor() as cur:
@@ -72,26 +72,27 @@ with DAG(
                         "Using trigger source: market_data.corporate_events "
                         f"(events lookback={CORPORATE_EVENTS_LOOKBACK_DAYS} days)"
                     )
-                    tickers = fetch_tickers_for_refresh(
+                    assets = fetch_tickers_for_refresh(
                         cur,
                         events_lookback_days=CORPORATE_EVENTS_LOOKBACK_DAYS,
                     )
         finally:
             conn.close()
 
-        print(f"Found {len(tickers)} tickers needing historical refresh.")
-        return tickers
+        print(f"Found {len(assets)} assets needing historical refresh.")
+        return assets
 
     @task
-    def refresh_ticker_history(tickers: list):
-        if not tickers:
-            print("No tickers to process. Exiting.")
+    def refresh_ticker_history(assets: list):
+        if not assets:
+            print("No assets to process. Exiting.")
             return
 
         end_date = datetime.today().strftime("%Y-%m-%d")
         start_date = (datetime.today() - timedelta(days=365 * 6)).strftime("%Y-%m-%d")
+        symbols = [asset.get("symbol") for asset in assets if asset.get("symbol")]
         print(
-            f"Fetching 6-year history ({start_date} to {end_date}) for tickers: {tickers}"
+            f"Fetching 6-year history ({start_date} to {end_date}) for symbols: {symbols}"
         )
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
@@ -99,12 +100,17 @@ with DAG(
             with conn.cursor() as source_cur:
                 ensure_corporate_events_table_exists(source_cur)
 
-            for ticker in tickers:
-                print(f"Processing {ticker}...")
-                df_price = fetch_stock_price(ticker, start_date, end_date)
+            for asset in assets:
+                symbol = asset.get("symbol")
+                asset_id = asset.get("asset_id")
+                if not symbol or not asset_id:
+                    print(f"Warning: Invalid asset payload skipped: {asset}")
+                    continue
+                print(f"Processing {symbol} ({asset_id})...")
+                df_price = fetch_stock_price(symbol, asset_id, start_date, end_date)
 
                 if df_price.empty:
-                    print(f"Warning: No data fetched for {ticker}. Skipping.")
+                    print(f"Warning: No data fetched for {symbol}. Skipping.")
                     continue
 
                 # Prepare for bulk upsert
@@ -115,7 +121,7 @@ with DAG(
                     "low",
                     "close",
                     "volume",
-                    "ticker",
+                    "asset_id",
                     "source",
                 ]
 
@@ -126,16 +132,16 @@ with DAG(
                         row["trading_date"] = row["trading_date"].date()
                     rows.append(tuple(row.get(col) for col in price_cols))
 
-                print(f"Upserting {len(rows)} rows for {ticker}...")
+                print(f"Upserting {len(rows)} rows for {symbol}...")
                 with conn:
                     with conn.cursor() as cur:
                         psycopg2.extras.execute_values(
                             cur,
                             """
-                            INSERT INTO market_data.market_data_prices
-                                (trading_date, open, high, low, close, volume, ticker, source)
+                            INSERT INTO market_data.prices
+                                (trading_date, open, high, low, close, volume, asset_id, source)
                             VALUES %s
-                            ON CONFLICT (ticker, trading_date) DO UPDATE SET
+                            ON CONFLICT (asset_id, trading_date) DO UPDATE SET
                                 open          = EXCLUDED.open,
                                 high          = EXCLUDED.high,
                                 low           = EXCLUDED.low,

@@ -94,7 +94,7 @@ class TestBatchProcessing:
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+        mock_supabase.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
             data=[
                 {"symbol": "VNM", "exchange": "HOSE"},
                 {"symbol": "HPG", "exchange": "HOSE"},
@@ -126,7 +126,7 @@ class TestBatchProcessing:
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+        mock_supabase.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
             data=[{"symbol": "EMPTY", "exchange": "HOSE"}]
         )
 
@@ -153,7 +153,7 @@ class TestBatchProcessing:
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+        mock_supabase.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
             data=[{"symbol": "BLANK", "exchange": "HOSE"}]
         )
 
@@ -187,7 +187,7 @@ class TestBatchProcessing:
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
+        mock_supabase.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
             data=[{"symbol": f"T{i:03d}", "exchange": "HOSE"} for i in range(51)]
         )
 

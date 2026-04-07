@@ -23,16 +23,38 @@ class TestFetchVnInstruments:
         mock_listing = MagicMock()
         mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
             {
-                "symbol": ["HPG", "41I1G4000", "E1VFVN30", "C4G12005", "BONDVN"],
+                "symbol": [
+                    "HPG",
+                    "41I1G4000",
+                    "E1VFVN30",
+                    "C4G12005",
+                    "BONDVN",
+                    "QOPEN",
+                    "DBONDX",
+                    "CLPB2503",
+                ],
                 "organ_name": [
                     "Hoa Phat Group",
                     "VN30 Index Futures 042026",
                     "VN30 ETF",
                     "Covered Warrant",
                     "Government Bond Futures",
+                    "Open-end Unit Trust",
+                    "Corporate Debenture",
+                    "Chứng quyền LPB/12M/SSI/C/EU/Cash-20",
                 ],
-                "exchange": ["HOSE", "HNX", "HOSE", "HOSE", "HNX"],
-                "type": ["STOCK", "FU", "ETF", "CW", "FU_BOND"],
+                "exchange": ["HOSE", "HNX", "HOSE", "HOSE", "HNX", "HSX", "HSX", "HSX"],
+                "type": [
+                    "STOCK",
+                    "FU",
+                    "ETF",
+                    "CW",
+                    "FU_BOND",
+                    "UNIT_TRUST",
+                    "DEBENTURE",
+                    None,
+                ],
+                "product_grp_id": ["STO", "FIO", "STO", "STO", "FIO", "STO", "HCX", "STO"],
             }
         )
         mock_listing.symbols_by_industries.return_value = pd.DataFrame(
@@ -50,11 +72,13 @@ class TestFetchVnInstruments:
             captured_records.extend(records)
             return len(records)
 
-        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert), patch.object(
+            module, "deactivate_stale_vn_stock_rows", return_value=0
+        ):
             result = module.fetch_vn_instruments()
 
-        assert result == 5
-        assert len(captured_records) == 5
+        assert result == 8
+        assert len(captured_records) == 8
 
         by_symbol = {row["symbol"]: row for row in captured_records}
         assert by_symbol["HPG"]["asset_class"] == "STOCK"
@@ -62,6 +86,9 @@ class TestFetchVnInstruments:
         assert by_symbol["E1VFVN30"]["asset_class"] == "ETF"
         assert by_symbol["C4G12005"]["asset_class"] == "DERIVATIVE"
         assert by_symbol["BONDVN"]["asset_class"] == "DERIVATIVE"
+        assert by_symbol["QOPEN"]["asset_class"] == "FUND"
+        assert by_symbol["DBONDX"]["asset_class"] == "BOND"
+        assert by_symbol["CLPB2503"]["asset_class"] == "DERIVATIVE"
         assert by_symbol["41I1G4000"]["external_api_metadata"]["symbol_type"] == "FU"
         assert by_symbol["C4G12005"]["external_api_metadata"]["symbol_type"] == "CW"
         assert by_symbol["BONDVN"]["external_api_metadata"]["symbol_type"] == "FU_BOND"
@@ -92,6 +119,38 @@ class TestFetchVnInstruments:
 
         assert result == 2
         assert {row["asset_class"] for row in captured_records} == {"STOCK"}
+
+    @patch("vnstock.Listing")
+    def test_deactivates_stale_stock_rows_for_symbols_reclassified_non_stock(
+        self, mock_listing_class
+    ):
+        from dags import assets_dimension_etl as module
+
+        mock_listing = MagicMock()
+        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG", "CLPB2503"],
+                "organ_name": [
+                    "Hoa Phat Group",
+                    "Chứng quyền LPB/12M/SSI/C/EU/Cash-20",
+                ],
+                "exchange": ["HOSE", "HSX"],
+                "type": ["STOCK", None],
+                "product_grp_id": ["STO", "STO"],
+            }
+        )
+        mock_listing.symbols_by_industries.side_effect = Exception("industry unavailable")
+        mock_listing_class.return_value = mock_listing
+
+        with patch.object(module, "upsert_assets_records", return_value=2), patch.object(
+            module,
+            "deactivate_stale_vn_stock_rows",
+            return_value=1,
+            create=True,
+        ) as mock_deactivate:
+            module.fetch_vn_instruments()
+
+        mock_deactivate.assert_called_once_with(["CLPB2503"])
 
 
 @pytest.mark.unit

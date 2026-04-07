@@ -16,19 +16,21 @@ def ensure_corporate_events_table_exists(cur: Any) -> None:
         raise RuntimeError("Required table market_data.corporate_events does not exist")
 
 
-def fetch_tickers_for_refresh(cur: Any, events_lookback_days: int) -> list[str]:
+def fetch_tickers_for_refresh(
+    cur: Any, events_lookback_days: int
+) -> list[dict[str, Any]]:
     cur.execute(
         """
-        SELECT DISTINCT a.symbol
+        SELECT DISTINCT a.symbol, ce.asset_id
         FROM market_data.corporate_events ce
         JOIN market_data.assets a
             ON a.id = ce.asset_id
         LEFT JOIN (
-            SELECT ticker, MAX(ingested_at) AS last_price_ingested_at
-            FROM market_data.market_data_prices
-            GROUP BY ticker
+            SELECT asset_id, MAX(ingested_at) AS last_price_ingested_at
+            FROM market_data.prices
+            GROUP BY asset_id
         ) mp
-            ON mp.ticker = a.symbol
+            ON mp.asset_id = ce.asset_id
         WHERE a.symbol IS NOT NULL
           AND (
               mp.last_price_ingested_at IS NULL
@@ -43,4 +45,4 @@ def fetch_tickers_for_refresh(cur: Any, events_lookback_days: int) -> list[str]:
         (events_lookback_days,),
     )
     rows = cur.fetchall()
-    return [row[0] for row in rows]
+    return [{"symbol": row[0], "asset_id": row[1]} for row in rows]

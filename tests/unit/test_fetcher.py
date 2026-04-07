@@ -566,7 +566,7 @@ class TestGetActiveVnStockTickers:
     @patch("dags.etl_modules.fetcher.create_client")
     def test_normalizes_symbols_and_deduplicates(self, mock_create_client):
         mock_client = Mock()
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+        mock_client.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
             {"symbol": "hpg"},
             {"symbol": "VCB"},
             {"symbol": " VCB "},
@@ -583,4 +583,23 @@ class TestGetActiveVnStockTickers:
             {"symbol": "HPG", "asset_id": "fallback"},
             {"symbol": "VCB", "asset_id": "fallback"},
             {"symbol": "FPT", "asset_id": "fallback"},
+        ]
+
+    @patch("dags.etl_modules.fetcher.create_client")
+    def test_ignores_only_explicit_non_stock_symbol_type(self, mock_create_client):
+        mock_client = Mock()
+        mock_client.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+            {"id": "asset-1", "symbol": "HPG", "metadata": {"symbol_type": "STOCK"}},
+            {"id": "asset-2", "symbol": "CLPB2503", "metadata": {"symbol_type": "CW"}},
+            {"id": "asset-3", "symbol": "41I1G4000", "metadata": {}},
+            {"id": "asset-4", "symbol": "TV2", "metadata": {}},
+        ]
+        mock_create_client.return_value = mock_client
+
+        result = get_active_vn_stock_tickers()
+
+        assert result == [
+            {"symbol": "HPG", "asset_id": "asset-1"},
+            {"symbol": "41I1G4000", "asset_id": "asset-3"},
+            {"symbol": "TV2", "asset_id": "asset-4"},
         ]

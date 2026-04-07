@@ -13,10 +13,10 @@ def get_latest_stock_data(tickers):
     Fetches latest stock data and nearest fundamental snapshot from Supabase
     Postgres tables for the given tickers.
 
-    Equivalent coverage to the former ClickHouse views:
-    - market_data_prices: latest daily close/volume
-    - market_data_financial_ratios: latest fiscal snapshot as-of trading_date
-    - assets: sector/industry metadata
+    Reads from normalized Supabase tables:
+    - prices: latest daily close/volume by asset_id
+    - financial_ratios: latest fiscal snapshot as-of trading_date by asset_id
+    - assets: symbol/sector/industry metadata
     Returns a dictionary with ticker as key and fundamental data as value.
     """
     if not tickers:
@@ -32,18 +32,30 @@ def get_latest_stock_data(tickers):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    WITH latest_price AS (
-                        SELECT DISTINCT ON (p.ticker)
-                            p.ticker,
+                    WITH target_assets AS (
+                        SELECT
+                            a.id AS asset_id,
+                            a.symbol,
+                            a.sector,
+                            a.industry
+                        FROM market_data.assets a
+                        WHERE a.symbol = ANY(%s)
+                          AND a.asset_class = 'STOCK'
+                          AND a.market = 'VN'
+                    ),
+                    latest_price AS (
+                        SELECT DISTINCT ON (p.asset_id)
+                            p.asset_id,
                             p.trading_date,
                             p.close,
                             p.volume
-                        FROM market_data.market_data_prices p
-                        WHERE p.ticker = ANY(%s)
-                        ORDER BY p.ticker, p.trading_date DESC
+                        FROM market_data.prices p
+                        JOIN target_assets ta
+                          ON ta.asset_id = p.asset_id
+                        ORDER BY p.asset_id, p.trading_date DESC
                     )
                     SELECT
-                        lp.ticker,
+                        ta.symbol AS ticker,
                         lp.trading_date::text,
                         lp.close,
                         lp.volume,
@@ -51,8 +63,8 @@ def get_latest_stock_data(tickers):
                             WHEN p20.close IS NULL OR p20.close = 0 THEN 0
                             ELSE ((lp.close - p20.close) / p20.close) * 100
                         END AS return_1m,
-                        COALESCE(a.sector, 'N/A') AS sector,
-                        COALESCE(a.industry, 'N/A') AS industry,
+                        COALESCE(ta.sector, 'N/A') AS sector,
+                        COALESCE(ta.industry, 'N/A') AS industry,
                         COALESCE(r.pe_ratio, CASE WHEN COALESCE(r.eps, 0) = 0 THEN 0 ELSE (lp.close * 1000) / r.eps END, 0) AS pe_ratio,
                         COALESCE(r.roe, 0) AS roe,
                         COALESCE(r.roic, 0) AS roic,
@@ -60,18 +72,16 @@ def get_latest_stock_data(tickers):
                         COALESCE(r.net_profit_margin, 0) AS net_profit_margin,
                         COALESCE(r.eps, 0) AS eps
                     FROM latest_price lp
+                    JOIN target_assets ta
+                      ON ta.asset_id = lp.asset_id
                     LEFT JOIN LATERAL (
                         SELECT p2.close
-                        FROM market_data.market_data_prices p2
-                        WHERE p2.ticker = lp.ticker
+                        FROM market_data.prices p2
+                        WHERE p2.asset_id = lp.asset_id
                           AND p2.trading_date < lp.trading_date
                         ORDER BY p2.trading_date DESC
                         OFFSET 19 LIMIT 1
                     ) p20 ON TRUE
-                    LEFT JOIN market_data.assets a
-                      ON a.symbol = lp.ticker
-                     AND a.asset_class = 'STOCK'
-                     AND a.market = 'VN'
                     LEFT JOIN LATERAL (
                         SELECT
                             fr.pe_ratio,
@@ -80,8 +90,8 @@ def get_latest_stock_data(tickers):
                             fr.debt_to_equity,
                             fr.net_profit_margin,
                             fr.eps
-                        FROM market_data.market_data_financial_ratios fr
-                        WHERE fr.ticker = lp.ticker
+                        FROM market_data.financial_ratios fr
+                        WHERE fr.asset_id = lp.asset_id
                           AND fr.fiscal_date <= lp.trading_date
                         ORDER BY fr.fiscal_date DESC
                         LIMIT 1
