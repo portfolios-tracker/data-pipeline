@@ -4,9 +4,49 @@ from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
-from vnstock import Company, Finance, Quote
 
-from supabase import create_client
+try:
+    from etl_modules.vci_provider import (
+        fetch_balance_sheet as fetch_balance_sheet_frame,
+    )
+    from etl_modules.vci_provider import (
+        fetch_company_events,
+        fetch_company_news,
+    )
+    from etl_modules.vci_provider import (
+        fetch_financial_ratios as fetch_financial_ratio_frame,
+    )
+    from etl_modules.vci_provider import (
+        fetch_income_statement as fetch_income_statement_frame,
+    )
+    from etl_modules.vci_provider import (
+        fetch_stock_price as fetch_stock_price_frame,
+    )
+    from etl_modules.vci_provider import (
+        list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.vci_provider import (
+        fetch_balance_sheet as fetch_balance_sheet_frame,
+    )
+    from dags.etl_modules.vci_provider import (
+        fetch_company_events,
+        fetch_company_news,
+    )
+    from dags.etl_modules.vci_provider import (
+        fetch_financial_ratios as fetch_financial_ratio_frame,
+    )
+    from dags.etl_modules.vci_provider import (
+        fetch_income_statement as fetch_income_statement_frame,
+    )
+    from dags.etl_modules.vci_provider import (
+        fetch_stock_price as fetch_stock_price_frame,
+    )
+    from dags.etl_modules.vci_provider import (
+        list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
+    )
 
 try:
     from etl_modules.cache import cached_data
@@ -15,10 +55,19 @@ except ModuleNotFoundError as exc:
         raise
     from dags.etl_modules.cache import cached_data
 
+Company = None
+
 # ---------------------------------------------------------------------------
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
 # ---------------------------------------------------------------------------
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
+
+
+def _extract_source_host(url: object) -> str | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    host = urlparse(url.strip()).netloc
+    return host or None
 
 
 # Temporary guardrail intentionally disabled.
@@ -38,85 +87,38 @@ _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 def get_active_vn_stock_tickers(
     raise_on_fallback: bool = False,
 ) -> list[dict[str, str]]:
-    """
-    Return active VN STOCK tickers from the Supabase ``market_data.assets`` table.
+    db_url = os.getenv("SUPABASE_DB_URL")
+    assets = list_active_vn_stock_tickers_frame(
+        db_url,
+        raise_on_fallback=raise_on_fallback,
+    )
 
-    Falls back to a hardcoded seed list when Supabase is not reachable
-    (e.g. during DAG file parsing on Airflow startup).
+    tickers = []
+    seen_symbols = set()
+    for row in assets:
+        if not isinstance(row, dict):
+            continue
+        symbol = row.get("symbol")
+        if not symbol:
+            continue
 
-    Parameters
-    ----------
-    raise_on_fallback : bool
-        When True, raise a RuntimeError instead of returning the fallback list.
-        Set this to True in task execution contexts to prevent silent partial
-        ingestion when Supabase is unexpectedly unreachable at runtime.
-    """
-    try:
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
-        if not url or not key:
-            raise ValueError(
-                "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY not set"
-            )
-        client = create_client(url, key)
-        response = (
-            client.schema("market_data")
-            .table("assets")
-            .select("id, symbol, metadata")
-            .eq("asset_class", "STOCK")
-            .eq("market", "VN")
-            .eq("status", "active")
-            .order("symbol")
-            .execute()
+        cleaned = str(symbol).strip().upper()
+        metadata = row.get("metadata") or {}
+        symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
+        if symbol_type and symbol_type != "STOCK":
+            continue
+        if cleaned and cleaned not in seen_symbols:
+            asset_id = row.get("asset_id") or row.get("id") or "fallback"
+            tickers.append({"symbol": cleaned, "asset_id": str(asset_id)})
+            seen_symbols.add(cleaned)
+
+    if tickers:
+        return tickers
+
+    if raise_on_fallback:
+        raise RuntimeError(
+            "market_data.assets query returned zero active VN stock tickers for market=VN and asset_class=STOCK"
         )
-
-        tickers = []
-        seen_symbols = set()
-        for row in response.data:
-            symbol = row.get("symbol")
-            if symbol:
-                cleaned = str(symbol).strip().upper()
-                metadata = row.get("metadata") or {}
-                symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
-                if symbol_type and symbol_type != "STOCK":
-                    continue
-                # Heuristic guardrail intentionally disabled:
-                # if not symbol_type and _looks_like_non_equity_vn_symbol(cleaned):
-                #     continue
-                if cleaned and cleaned not in seen_symbols:
-                    tickers.append(
-                        {"symbol": cleaned, "asset_id": row.get("id", "fallback")}
-                    )
-                    seen_symbols.add(cleaned)
-
-        if tickers:
-            logging.info(f"Loaded {len(tickers)} active VN tickers from assets table")
-            return tickers
-        # Treat an empty result set as a fallback condition as well
-        if raise_on_fallback:
-            raise RuntimeError(
-                "Supabase market_data.assets query returned zero active VN stock tickers "
-                "for market=VN and asset_class=STOCK. "
-                "Task will fail so Airflow can retry. "
-                "If this is persistent, check assets table contents and filters."
-            )
-        logging.warning(
-            "Supabase market_data.assets query returned zero active VN stock tickers, "
-            f"falling back to seed list of {len(_FALLBACK_VN_TICKERS)} tickers "
-            "(partial ingestion risk)."
-        )
-    except Exception as e:
-        if raise_on_fallback:
-            raise RuntimeError(
-                f"Could not load active VN stock tickers from Supabase market_data.assets table: {e}. "
-                "Task will fail so Airflow can retry. "
-                "If this is persistent, check Supabase connectivity and the assets table."
-            ) from e
-        logging.error(
-            f"Could not query market_data.assets table, falling back to seed list of "
-            f"{len(_FALLBACK_VN_TICKERS)} tickers (partial ingestion risk): {e}"
-        )
-
     return [{"symbol": t, "asset_id": "fallback"} for t in _FALLBACK_VN_TICKERS]
 
 
@@ -144,10 +146,8 @@ def clean_decimal_cols(df, cols):
 @cached_data(ttl_seconds=43200)  # 12 hours
 def fetch_stock_price(symbol, asset_id, start_date, end_date):
     logging.info(f"Attempting fetch for {symbol}...")
-    df = pd.DataFrame()
     try:
-        quote = Quote(symbol=symbol, source="vci")
-        df = quote.history(start=start_date, end=end_date, interval="D")
+        df = fetch_stock_price_frame(symbol, start_date, end_date)
         if df is None or df.empty:
             raise ValueError("Empty data")
 
@@ -156,14 +156,11 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
             columns={"time": "trading_date", "date": "trading_date"}, inplace=True
         )
 
-        # Now fetching full OHLCV
-        required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
-        df = df[[c for c in required_cols if c in df.columns]]
         df["ticker"] = symbol
         df["asset_id"] = asset_id
-        df["source"] = "vnstock"
+        df["source"] = "vci"
     except Exception as e:
-        logging.warning(f"VNSTOCK failed for {symbol}: {e}")
+        logging.warning(f"VCI failed for {symbol}: {e}")
         return pd.DataFrame()
 
     if df.empty:
@@ -185,14 +182,9 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
 def fetch_financial_ratios(symbol, asset_id):
     logging.info(f"Fetching ratios for {symbol}...")
     try:
-        finance = Finance(symbol=symbol, source="VCI")
-        df = finance.ratio(period="quarter", lang="en", dropna=True)
+        df = fetch_financial_ratio_frame(symbol, period="Q")
         if df is None or df.empty:
             return pd.DataFrame()
-
-        # 1. Flatten MultiIndex Columns
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = ["_".join(map(str, col)).strip() for col in df.columns.values]
 
         col_list = df.columns.tolist()
 
@@ -202,7 +194,6 @@ def fetch_financial_ratios(symbol, asset_id):
                     return c
             return None
 
-        # 2. Map Columns - Start with the source dataframe
         year_col = get_col("yearReport")
         quarter_col = get_col("lengthReport")
         if not year_col or not quarter_col:
@@ -278,11 +269,7 @@ def fetch_income_stmt(symbol, asset_id):
     Fetches income statement.
     """
     try:
-        finance = Finance(symbol=symbol, source="VCI")
-        try:
-            df = finance.income_statement(period="quarter", lang="en", dropna=True)
-        except AttributeError:
-            return pd.DataFrame()
+        df = fetch_income_statement_frame(symbol, period="Q")
 
         if df is None or df.empty:
             return pd.DataFrame()
@@ -369,11 +356,7 @@ def fetch_income_stmt(symbol, asset_id):
 @cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_balance_sheet(symbol, asset_id):
     try:
-        finance = Finance(symbol=symbol, source="VCI")
-        try:
-            df = finance.balance_sheet(period="quarter", lang="en", dropna=True)
-        except AttributeError:
-            return pd.DataFrame()
+        df = fetch_balance_sheet_frame(symbol, period="Q")
 
         if df is None or df.empty:
             return pd.DataFrame()
@@ -443,43 +426,12 @@ def fetch_balance_sheet(symbol, asset_id):
 @cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_corporate_events(symbol, asset_id):
     try:
-        company = Company(symbol=symbol, source="VCI")
-        df = company.events()
+        df = fetch_company_events(symbol)
         if df is None or df.empty:
             return pd.DataFrame()
 
         df_final = df.copy()
         df_final["asset_id"] = asset_id
-
-        mapping = {
-            "id": "event_id",
-            "en__event_title": "event_title",
-            "event_title": "event_title",
-        }
-
-        # Only rename if column exists
-        for old_col, new_col in mapping.items():
-            if old_col in df_final.columns and new_col not in df_final.columns:
-                df_final.rename(columns={old_col: new_col}, inplace=True)
-
-        date_mapping = {
-            "exerDate": "event_date",
-            "exerciseDate": "event_date",
-            "exrightDate": "exright_date",
-            "publicDate": "public_date",
-        }
-        for old_col, new_col in date_mapping.items():
-            if old_col in df_final.columns and new_col not in df_final.columns:
-                df_final.rename(columns={old_col: new_col}, inplace=True)
-
-        type_mapping = {
-            "eventCode": "event_type",
-            "eventType": "event_type",
-            "eventDesc": "event_description",
-        }
-        for old_col, new_col in type_mapping.items():
-            if old_col in df_final.columns and new_col not in df_final.columns:
-                df_final.rename(columns={old_col: new_col}, inplace=True)
 
         required_cols = [
             "asset_id",
@@ -543,24 +495,26 @@ def fetch_index_history(
         "Fetching index history for %s (%s → %s)", symbol, start_date, end_date
     )
     try:
-        from vnstock import Vnstock
-
-        stock = Vnstock().stock(symbol=symbol, source="VCI")
-        df = stock.quote.history(start=start_date, end=end_date, interval="1D")
+        index_symbol_map = {
+            "VNINDEX": "VNINDEX",
+            "VN30": "VN30",
+            "HNXINDEX": "HNXIndex",
+            "UPCOMINDEX": "HNXUpcomIndex",
+        }
+        api_symbol = index_symbol_map.get(symbol.upper(), symbol)
+        df = fetch_stock_price_frame(api_symbol, start_date, end_date)
         if df is None or df.empty:
             raise ValueError(f"Empty data returned for index {symbol}")
 
-        df.columns = [c.lower() for c in df.columns]
-        df.rename(
-            columns={"time": "trading_date", "date": "trading_date"}, inplace=True
-        )
-
-        if not pd.api.types.is_datetime64_any_dtype(df["trading_date"]):
-            df["trading_date"] = pd.to_datetime(df["trading_date"])
-        df["trading_date"] = df["trading_date"].dt.date
-
         df["ticker"] = symbol
         df["source"] = "vnstock_index"
+
+        if "trading_date" in df.columns and not pd.api.types.is_datetime64_any_dtype(
+            df["trading_date"]
+        ):
+            df["trading_date"] = pd.to_datetime(df["trading_date"])
+        if "trading_date" in df.columns:
+            df["trading_date"] = df["trading_date"].dt.date
 
         df = clean_decimal_cols(df, ["close"])
         df["volume"] = (
@@ -593,6 +547,12 @@ def fetch_index_history(
 def fetch_dividends(symbol, asset_id):
     """Fetch dividend history and normalize to a stable schema."""
     try:
+        global Company
+        if Company is None:
+            from vnstock import Company as VnstockCompany
+
+            Company = VnstockCompany
+
         company = Company(symbol=symbol, source="VCI")
         df = company.dividends()
         if df is None or df.empty:
@@ -645,66 +605,39 @@ def fetch_dividends(symbol, asset_id):
 @cached_data(ttl_seconds=3600)  # 1 hour
 def fetch_news(symbol, asset_id):
     try:
-        company = Company(symbol=symbol, source="VCI")
-        df = company.news(page_size=50)
+        df = fetch_company_news(symbol)
         if df is None or df.empty:
             return pd.DataFrame()
 
         df["ticker"] = symbol
         df["asset_id"] = asset_id
-
-        # Normalize column names between providers
-        if "public_date" in df.columns:
-            df.rename(columns={"public_date": "publish_date"}, inplace=True)
-        if "news_title" in df.columns:
+        if "news_title" in df.columns and "title" not in df.columns:
             df.rename(columns={"news_title": "title"}, inplace=True)
-
-        # Only rename id -> news_id if news_id doesn't already exist
-        if "id" in df.columns and "news_id" not in df.columns:
-            df.rename(columns={"id": "news_id"}, inplace=True)
-
-        # Map price columns
         if "price" in df.columns and "price_at_publish" not in df.columns:
             df.rename(columns={"price": "price_at_publish"}, inplace=True)
-        elif "close_price" in df.columns:
+        if "close_price" in df.columns and "price_at_publish" not in df.columns:
             df["price_at_publish"] = pd.to_numeric(df["close_price"], errors="coerce")
-
-        # Price change metrics
-        if "ref_price" in df.columns and "close_price" in df.columns:
+        if "reference_price" in df.columns and "price_change" not in df.columns:
             df["price_change"] = pd.to_numeric(
-                df["close_price"], errors="coerce"
-            ) - pd.to_numeric(df["ref_price"], errors="coerce")
-        if "price_change_pct" in df.columns:
+                df.get("price_at_publish"), errors="coerce"
+            ) - pd.to_numeric(df["reference_price"], errors="coerce")
+        if (
+            "percent_price_change" in df.columns
+            and "price_change_ratio" not in df.columns
+        ):
             df["price_change_ratio"] = pd.to_numeric(
-                df["price_change_pct"], errors="coerce"
+                df["percent_price_change"], errors="coerce"
             )
-
-        # Derive source from link if available
+        if "id" in df.columns and "news_id" not in df.columns:
+            df.rename(columns={"id": "news_id"}, inplace=True)
         if "source" not in df.columns and "news_source_link" in df.columns:
-            try:
-                df["source"] = df["news_source_link"].apply(
-                    lambda x: urlparse(x).netloc if isinstance(x, str) else None
-                )
-            except Exception:
-                df["source"] = None
-
-        # Publish date to datetime (VCI returns epoch ms)
-        if "publish_date" in df.columns:
-            try:
-                if pd.api.types.is_numeric_dtype(df["publish_date"]):
-                    df["publish_date"] = pd.to_datetime(
-                        df["publish_date"], unit="ms", errors="coerce"
-                    )
-                else:
-                    df["publish_date"] = pd.to_datetime(
-                        df["publish_date"], errors="coerce"
-                    )
-            except Exception:
-                df["publish_date"] = pd.to_datetime(df["publish_date"], errors="coerce")
-
+            df["source"] = df["news_source_link"].apply(_extract_source_host)
+        df["publish_date"] = pd.to_datetime(df["publish_date"], errors="coerce")
+        df = clean_decimal_cols(
+            df, ["price_at_publish", "price_change", "price_change_ratio", "rsi", "rs"]
+        )
         required_cols = [
             "ticker",
-            "asset_id",
             "publish_date",
             "title",
             "source",
@@ -717,15 +650,20 @@ def fetch_news(symbol, asset_id):
         ]
         for col in required_cols:
             if col not in df.columns:
-                df[col] = 0 if "price" in col or "rs" in col else None
-
-        df = clean_decimal_cols(
-            df, ["price_at_publish", "price_change", "price_change_ratio", "rsi", "rs"]
-        )
+                df[col] = (
+                    0.0
+                    if col
+                    in {
+                        "price_at_publish",
+                        "price_change",
+                        "price_change_ratio",
+                        "rsi",
+                        "rs",
+                    }
+                    else None
+                )
         return df[required_cols]
     except SystemExit as e:
-        # vnstock raises SystemExit when rate limit is exceeded.
-        # Return empty data so the DAG can continue and persist partial results.
         logging.warning(f"Rate-limited while fetching news for {symbol}: {e}")
         return pd.DataFrame()
     except Exception as e:

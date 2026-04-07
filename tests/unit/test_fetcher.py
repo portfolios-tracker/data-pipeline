@@ -117,20 +117,21 @@ class TestCleanDecimalCols:
 class TestFetchStockPrice:
     """Test suite for fetch_stock_price function."""
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_successful_fetch_returns_dataframe(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_successful_fetch_returns_dataframe(self, mock_price_frame):
         """Test successful stock price fetch returns properly formatted DataFrame."""
         # Setup mock
-        mock_quote = Mock()
         mock_df = pd.DataFrame(
             {
-                "time": pd.date_range("2024-01-01", periods=10),
+                "trading_date": pd.date_range("2024-01-01", periods=10),
+                "open": [100.0] * 10,
+                "high": [101.0] * 10,
+                "low": [99.0] * 10,
                 "close": [100.5] * 10,
                 "volume": [1000000] * 10,
             }
         )
-        mock_quote.history.return_value = mock_df
-        mock_quote_class.return_value = mock_quote
+        mock_price_frame.return_value = mock_df
 
         # Execute
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
@@ -142,12 +143,10 @@ class TestFetchStockPrice:
         assert result["ticker"].iloc[0] == "HPG"
         assert len(result) == 10
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_empty_response_returns_empty_dataframe(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_empty_response_returns_empty_dataframe(self, mock_price_frame):
         """Test that empty API response returns empty DataFrame."""
-        mock_quote = Mock()
-        mock_quote.history.return_value = pd.DataFrame()
-        mock_quote_class.return_value = mock_quote
+        mock_price_frame.return_value = pd.DataFrame()
 
         result = fetch_stock_price(
             "INVALID", "dummy_asset_id", "2024-01-01", "2024-01-10"
@@ -155,20 +154,19 @@ class TestFetchStockPrice:
 
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_api_exception_returns_empty_dataframe(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_api_exception_returns_empty_dataframe(self, mock_price_frame):
         """Test that API exceptions are caught and return empty DataFrame."""
-        mock_quote_class.side_effect = Exception("API Error")
+        mock_price_frame.side_effect = Exception("API Error")
 
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_no_technical_indicators_in_output(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_no_technical_indicators_in_output(self, mock_price_frame):
         """Test that TA indicator columns are not included in output."""
         # Setup mock with enough data
-        mock_quote = Mock()
         dates = pd.date_range("2024-01-01", periods=250)
         prices = [100 + i * 0.1 for i in range(250)]
 
@@ -179,8 +177,7 @@ class TestFetchStockPrice:
                 "volume": [1000000] * 250,
             }
         )
-        mock_quote.history.return_value = mock_df
-        mock_quote_class.return_value = mock_quote
+        mock_price_frame.return_value = mock_df
 
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-12-31")
 
@@ -198,38 +195,40 @@ class TestFetchStockPrice:
                 f"Stale TA column '{col}' should not be in output"
             )
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_nan_values_cleaned(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_nan_values_cleaned(self, mock_price_frame):
         """Test that NaN values in close prices are cleaned to 0."""
-        mock_quote = Mock()
         mock_df = pd.DataFrame(
             {
-                "time": pd.date_range("2024-01-01", periods=10),
+                "trading_date": pd.date_range("2024-01-01", periods=10),
+                "open": [100.0] * 10,
+                "high": [101.0] * 10,
+                "low": [99.0] * 10,
                 "close": [100.5, np.nan, 102.0] + [100.0] * 7,
                 "volume": [1000000] * 10,
             }
         )
-        mock_quote.history.return_value = mock_df
-        mock_quote_class.return_value = mock_quote
+        mock_price_frame.return_value = mock_df
 
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-10")
 
         assert result["close"].isna().sum() == 0
         assert result["close"].iloc[1] == 0.0
 
-    @patch("dags.etl_modules.fetcher.Quote")
-    def test_trading_date_converted_to_date(self, mock_quote_class):
+    @patch("dags.etl_modules.fetcher.fetch_stock_price_frame")
+    def test_trading_date_converted_to_date(self, mock_price_frame):
         """Test that trading_date is converted to date type (not datetime)."""
-        mock_quote = Mock()
         mock_df = pd.DataFrame(
             {
-                "time": pd.date_range("2024-01-01", periods=5),
+                "trading_date": pd.date_range("2024-01-01", periods=5),
+                "open": [100.0] * 5,
+                "high": [101.0] * 5,
+                "low": [99.0] * 5,
                 "close": [100.5] * 5,
                 "volume": [1000000] * 5,
             }
         )
-        mock_quote.history.return_value = mock_df
-        mock_quote_class.return_value = mock_quote
+        mock_price_frame.return_value = mock_df
 
         result = fetch_stock_price("HPG", "dummy_asset_id", "2024-01-01", "2024-01-05")
 
@@ -247,26 +246,20 @@ class TestFetchStockPrice:
 class TestFetchFinancialRatios:
     """Test suite for fetch_financial_ratios function."""
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_successful_fetch_returns_dataframe(self, mock_finance_class):
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    def test_successful_fetch_returns_dataframe(self, mock_ratio_frame):
         """Test successful ratio fetch returns properly formatted DataFrame."""
-        mock_finance = Mock()
-
-        # Create MultiIndex DataFrame like vnstock returns (with yearReport/lengthReport)
-        data = {
-            ("Chỉ số định giá", "P/E"): [15.5, 16.2],
-            ("Chỉ số định giá", "P/B"): [2.1, 2.3],
-            ("Chỉ số định giá", "P/S"): [1.5, 1.6],
-            ("Chỉ số hiệu quả hoạt động", "ROE (%)"): [18.5, 19.2],
-            ("Chỉ số tăng trưởng", "EPS"): [5000, 5200],
-            ("Năm báo cáo", "yearReport"): [2024, 2024],
-            ("Độ dài báo cáo", "lengthReport"): [4, 3],
-        }
-        mock_df = pd.DataFrame(data)
-        mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
-
-        mock_finance.ratio.return_value = mock_df
-        mock_finance_class.return_value = mock_finance
+        mock_ratio_frame.return_value = pd.DataFrame(
+            {
+                "yearReport": [2024, 2024],
+                "lengthReport": [4, 3],
+                "P/E": [15.5, 16.2],
+                "P/B": [2.1, 2.3],
+                "P/S": [1.5, 1.6],
+                "ROE (%)": [18.5, 19.2],
+                "EPS": [5000, 5200],
+            }
+        )
 
         result = fetch_financial_ratios("HPG", "dummy_asset_id")
 
@@ -275,33 +268,26 @@ class TestFetchFinancialRatios:
         assert "fiscal_date" in result.columns
         assert result["ticker"].iloc[0] == "HPG"
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_empty_response_returns_empty_dataframe(self, mock_finance_class):
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    def test_empty_response_returns_empty_dataframe(self, mock_ratio_frame):
         """Test that empty response returns empty DataFrame."""
-        mock_finance = Mock()
-        mock_finance.ratio.return_value = pd.DataFrame()
-        mock_finance_class.return_value = mock_finance
+        mock_ratio_frame.return_value = pd.DataFrame()
 
         result = fetch_financial_ratios("INVALID", "dummy_asset_id")
 
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_column_mapping_applied(self, mock_finance_class):
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    def test_column_mapping_applied(self, mock_ratio_frame):
         """Test that Vietnamese column names are mapped to English."""
-        mock_finance = Mock()
-
-        data = {
-            ("Chỉ số định giá", "P/E"): [15.5],
-            ("Chỉ số hiệu quả hoạt động", "ROE (%)"): [18.5],
-            ("Năm báo cáo", "yearReport"): [2024],
-            ("Độ dài báo cáo", "lengthReport"): [4],
-        }
-        mock_df = pd.DataFrame(data)
-        mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
-
-        mock_finance.ratio.return_value = mock_df
-        mock_finance_class.return_value = mock_finance
+        mock_ratio_frame.return_value = pd.DataFrame(
+            {
+                "yearReport": [2024],
+                "lengthReport": [4],
+                "P/E": [15.5],
+                "ROE (%)": [18.5],
+            }
+        )
 
         result = fetch_financial_ratios("HPG", "dummy_asset_id")
 
@@ -344,11 +330,9 @@ def test_fetch_news_placeholder():
 class TestFetchIncomeStmt:
     """Unit tests for fetch_income_stmt function."""
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_income_stmt_success(self, mock_finance_class):
-        mock_finance = Mock()
-        # Mock VCI income statement with expected English column names and year/quarter metadata
-        df = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_success(self, mock_income_frame):
+        mock_income_frame.return_value = pd.DataFrame(
             {
                 "Net Sales": [5_000_000_000_000],
                 "Cost of Sales": [3_500_000_000_000],
@@ -359,8 +343,6 @@ class TestFetchIncomeStmt:
                 "lengthReport": [4],
             }
         )
-        mock_finance.income_statement.return_value = df
-        mock_finance_class.return_value = mock_finance
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
 
@@ -383,19 +365,15 @@ class TestFetchIncomeStmt:
         # Values preserved and cleaned
         assert result["revenue"].iloc[0] == 5_000_000_000_000
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_income_stmt_handles_missing_columns(self, mock_finance_class):
-        mock_finance = Mock()
-        # Missing some metrics, should fill with 0 and still return
-        df = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_handles_missing_columns(self, mock_income_frame):
+        mock_income_frame.return_value = pd.DataFrame(
             {
                 "Net Sales": [5_000_000_000_000],
                 "yearReport": [2024],
                 "lengthReport": [4],
             }
         )
-        mock_finance.income_statement.return_value = df
-        mock_finance_class.return_value = mock_finance
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
 
@@ -403,11 +381,9 @@ class TestFetchIncomeStmt:
         assert result["operating_profit"].iloc[0] == 0.0
         assert result["net_profit_post_tax"].iloc[0] == 0.0
 
-    @patch("dags.etl_modules.fetcher.Finance")
-    def test_income_stmt_empty_dataframe(self, mock_finance_class):
-        mock_finance = Mock()
-        mock_finance.income_statement.return_value = pd.DataFrame()
-        mock_finance_class.return_value = mock_finance
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_empty_dataframe(self, mock_income_frame):
+        mock_income_frame.return_value = pd.DataFrame()
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
         assert result.empty
@@ -479,24 +455,21 @@ class TestFetchDividends:
 class TestFetchNews:
     """Unit tests for fetch_news function."""
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_news_success(self, mock_company_class):
-        mock_company = Mock()
-        df = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_company_news")
+    def test_news_success(self, mock_news_frame):
+        mock_news_frame.return_value = pd.DataFrame(
             {
                 "publish_date": ["2024-12-20T10:30:00"],
                 "title": ["HPG announces strong Q4 results"],
                 "source": ["CafeF"],
-                "price": [25500],
+                "price_at_publish": [25500],
                 "price_change": [2.5],
                 "price_change_ratio": [0.012],
                 "rsi": [45.2],
                 "rs": [0.5],
-                "id": [12345],
+                "news_id": [12345],
             }
         )
-        mock_company.news.return_value = df
-        mock_company_class.return_value = mock_company
 
         result = fetch_news("HPG", "dummy_asset_id")
 
@@ -522,18 +495,15 @@ class TestFetchNews:
         )
         assert result["price_at_publish"].iloc[0] == 25500
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_news_missing_fields_filled(self, mock_company_class):
-        mock_company = Mock()
-        df = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_company_news")
+    def test_news_missing_fields_filled(self, mock_news_frame):
+        mock_news_frame.return_value = pd.DataFrame(
             {
                 "publish_date": ["2024-12-20T10:30:00"],
                 "title": ["HPG update"],
                 "source": ["CafeF"],
             }
         )
-        mock_company.news.return_value = df
-        mock_company_class.return_value = mock_company
 
         result = fetch_news("HPG", "dummy_asset_id")
         assert not result.empty
@@ -541,32 +511,48 @@ class TestFetchNews:
         # Default for non-price/rs fields is None per implementation
         assert result["news_id"].iloc[0] is None
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_news_empty_dataframe(self, mock_company_class):
-        mock_company = Mock()
-        mock_company.news.return_value = pd.DataFrame()
-        mock_company_class.return_value = mock_company
+    @patch("dags.etl_modules.fetcher.fetch_company_news")
+    def test_news_empty_dataframe(self, mock_news_frame):
+        mock_news_frame.return_value = pd.DataFrame()
 
         result = fetch_news("HPG", "dummy_asset_id")
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_news_rate_limit_system_exit_returns_empty(self, mock_company_class):
-        """SystemExit (vnstock rate limit) should be handled gracefully."""
-        mock_company_class.side_effect = SystemExit("Rate limit exceeded")
+    @patch("dags.etl_modules.fetcher.fetch_company_news")
+    def test_news_rate_limit_system_exit_returns_empty(self, mock_news_frame):
+        """Provider errors should be handled gracefully."""
+        mock_news_frame.side_effect = SystemExit("Rate limit exceeded")
 
         result = fetch_news("HPG", "dummy_asset_id")
         assert result.empty
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_company_news")
+    def test_news_relative_source_url_does_not_drop_row(
+        self, mock_news_frame, _mock_get_redis_client
+    ):
+        """Malformed/relative URLs should not crash source extraction."""
+        mock_news_frame.return_value = pd.DataFrame(
+            {
+                "publish_date": ["2024-12-20T10:30:00"],
+                "title": ["HPG update"],
+                "news_source_link": ["relative/path"],
+            }
+        )
+
+        result = fetch_news("HPG", "dummy_asset_id")
+
+        assert not result.empty
+        assert result["source"].iloc[0] is None
 
 
 @pytest.mark.unit
 class TestGetActiveVnStockTickers:
     """Unit tests for get_active_vn_stock_tickers ticker filtering."""
 
-    @patch("dags.etl_modules.fetcher.create_client")
-    def test_normalizes_symbols_and_deduplicates(self, mock_create_client):
-        mock_client = Mock()
-        mock_client.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+    @patch("dags.etl_modules.fetcher.list_active_vn_stock_tickers_frame")
+    def test_normalizes_symbols_and_deduplicates(self, mock_ticker_frame):
+        mock_ticker_frame.return_value = [
             {"symbol": "hpg"},
             {"symbol": "VCB"},
             {"symbol": " VCB "},
@@ -575,7 +561,6 @@ class TestGetActiveVnStockTickers:
             {"symbol": "   "},
             {"symbol": "FPT"},
         ]
-        mock_create_client.return_value = mock_client
 
         result = get_active_vn_stock_tickers()
 
@@ -585,16 +570,14 @@ class TestGetActiveVnStockTickers:
             {"symbol": "FPT", "asset_id": "fallback"},
         ]
 
-    @patch("dags.etl_modules.fetcher.create_client")
-    def test_ignores_only_explicit_non_stock_symbol_type(self, mock_create_client):
-        mock_client = Mock()
-        mock_client.schema.return_value.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+    @patch("dags.etl_modules.fetcher.list_active_vn_stock_tickers_frame")
+    def test_ignores_only_explicit_non_stock_symbol_type(self, mock_ticker_frame):
+        mock_ticker_frame.return_value = [
             {"id": "asset-1", "symbol": "HPG", "metadata": {"symbol_type": "STOCK"}},
             {"id": "asset-2", "symbol": "CLPB2503", "metadata": {"symbol_type": "CW"}},
             {"id": "asset-3", "symbol": "41I1G4000", "metadata": {}},
             {"id": "asset-4", "symbol": "TV2", "metadata": {}},
         ]
-        mock_create_client.return_value = mock_client
 
         result = get_active_vn_stock_tickers()
 
@@ -602,4 +585,18 @@ class TestGetActiveVnStockTickers:
             {"symbol": "HPG", "asset_id": "asset-1"},
             {"symbol": "41I1G4000", "asset_id": "asset-3"},
             {"symbol": "TV2", "asset_id": "asset-4"},
+        ]
+
+    @patch("dags.etl_modules.fetcher.list_active_vn_stock_tickers_frame")
+    def test_prefers_asset_id_key_from_provider_rows(self, mock_ticker_frame):
+        mock_ticker_frame.return_value = [
+            {"asset_id": "asset-hpg", "symbol": "HPG"},
+            {"id": "asset-vcb", "symbol": "VCB"},
+        ]
+
+        result = get_active_vn_stock_tickers()
+
+        assert result == [
+            {"symbol": "HPG", "asset_id": "asset-hpg"},
+            {"symbol": "VCB", "asset_id": "asset-vcb"},
         ]

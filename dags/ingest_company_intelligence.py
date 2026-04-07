@@ -2,7 +2,7 @@
 Company Intelligence Ingestion DAG
 Story: 1-2-semantic-knowledge-ingestion-airflow-and-supabase
 
-Fetches VN company profiles from vnstock (VCI source), generates 768-dimensional
+Fetches VN company profiles from the VCI provider, generates 768-dimensional
 embeddings via Gemini text-embedding-004, and upserts to Supabase pgvector.
 
 Schedule: Weekly Sunday 4 AM (after assets_dimension_etl at 2 AM)
@@ -12,11 +12,18 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from google import genai
-from vnstock import Company
+
+try:
+    from etl_modules.vci_provider import fetch_company_overview
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.vci_provider import fetch_company_overview
 
 from supabase import Client, create_client
 
@@ -45,8 +52,8 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-dag = DAG(
-    "ingest_company_intelligence",
+dag = DAG(  # type: ignore[call-arg]
+    dag_id="ingest_company_intelligence",
     default_args=default_args,
     description="Ingest VN company profiles → Gemini embeddings → Supabase pgvector",
     schedule="0 4 * * 0",
@@ -82,7 +89,7 @@ def build_embedding_text(
 
 def fetch_company_profiles(**context):
     """
-    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via vnstock.
+    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via the VCI provider.
 
     - Rate limited: 0.5s sleep between API calls
     - Logs progress every 50 tickers
@@ -101,7 +108,10 @@ def fetch_company_profiles(**context):
         .execute()
     )
     tickers = []
-    for row in response.data:
+    rows = cast(list[dict], response.data or [])
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
             continue
@@ -119,8 +129,7 @@ def fetch_company_profiles(**context):
 
     for idx, (symbol, exchange) in enumerate(tickers):
         try:
-            company = Company(symbol=symbol, source="VCI")
-            overview = company.overview()
+            overview = fetch_company_overview(symbol)
 
             if overview is None or overview.empty:
                 logger.warning(f"No overview data for {symbol}, skipping")
@@ -200,10 +209,16 @@ def generate_and_upsert_embeddings(**context):
         try:
             response = client.models.embed_content(
                 model="text-embedding-004",
-                contents=batch_texts,
+                contents=batch_texts,  # type: ignore[arg-type]
                 config={"task_type": "CLUSTERING"},
             )
-            batch_embeddings = [ebd.values for ebd in response.embeddings]
+            embeddings = getattr(response, "embeddings", None) or []
+            batch_embeddings = [ebd.values for ebd in embeddings]
+            if len(batch_embeddings) != len(batch_texts):
+                raise ValueError(
+                    "Embedding count mismatch for batch "
+                    f"{i // batch_size + 1}: expected {len(batch_texts)}, got {len(batch_embeddings)}"
+                )
             all_embeddings.extend(batch_embeddings)
             logger.info(
                 f"Generated embeddings batch {i // batch_size + 1}: {len(all_embeddings)}/{len(texts)}"
@@ -217,6 +232,11 @@ def generate_and_upsert_embeddings(**context):
     logger.info(
         f"Upserting {len(all_embeddings)} records to Supabase company_embeddings..."
     )
+    if len(all_embeddings) != len(texts):
+        raise ValueError(
+            "Embedding count mismatch before upsert: "
+            f"expected {len(texts)}, got {len(all_embeddings)}"
+        )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     records = []
@@ -290,4 +310,4 @@ task_backfill = PythonOperator(
     dag=dag,
 )
 
-task_fetch_profiles >> [task_embed_and_upsert, task_backfill]
+_ = task_fetch_profiles >> [task_embed_and_upsert, task_backfill]

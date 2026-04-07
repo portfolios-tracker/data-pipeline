@@ -86,7 +86,9 @@ class TestBatchProcessing:
 
     @patch("dags.ingest_company_intelligence.time.sleep")
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    def test_rate_limiting_sleep_called_between_tickers(self, mock_get_supabase, mock_sleep):
+    def test_rate_limiting_sleep_called_between_tickers(
+        self, mock_get_supabase, mock_sleep
+    ):
         """
         Verifies 0.5s sleep is called after each ticker regardless of success or failure.
         """
@@ -105,13 +107,13 @@ class TestBatchProcessing:
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
-            mock_company = MagicMock()
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview"
+        ) as mock_fetch_overview:
             import pandas as pd
 
             empty_df = pd.DataFrame()
-            mock_company.overview.return_value = empty_df
-            mock_company_cls.return_value = mock_company
+            mock_fetch_overview.return_value = empty_df
 
             fetch_company_profiles(**context)
 
@@ -133,10 +135,10 @@ class TestBatchProcessing:
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
-            mock_company = MagicMock()
-            mock_company.overview.return_value = pd.DataFrame()
-            mock_company_cls.return_value = mock_company
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview"
+        ) as mock_fetch_overview:
+            mock_fetch_overview.return_value = pd.DataFrame()
 
             with patch("dags.ingest_company_intelligence.time.sleep"):
                 result = fetch_company_profiles(**context)
@@ -160,9 +162,10 @@ class TestBatchProcessing:
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
-            mock_company = MagicMock()
-            mock_company.overview.return_value = pd.DataFrame(
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview"
+        ) as mock_fetch_overview:
+            mock_fetch_overview.return_value = pd.DataFrame(
                 [
                     {
                         "company_profile": "",
@@ -172,8 +175,6 @@ class TestBatchProcessing:
                     }
                 ]
             )
-            mock_company_cls.return_value = mock_company
-
             with patch("dags.ingest_company_intelligence.time.sleep"):
                 result = fetch_company_profiles(**context)
 
@@ -194,9 +195,10 @@ class TestBatchProcessing:
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
-            mock_company = MagicMock()
-            mock_company.overview.return_value = pd.DataFrame(
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview"
+        ) as mock_fetch_overview:
+            mock_fetch_overview.return_value = pd.DataFrame(
                 [
                     {
                         "company_profile": "Profile text",
@@ -206,8 +208,6 @@ class TestBatchProcessing:
                     }
                 ]
             )
-            mock_company_cls.return_value = mock_company
-
             with patch("dags.ingest_company_intelligence.time.sleep"):
                 with patch("dags.ingest_company_intelligence.logger") as mock_logger:
                     fetch_company_profiles(**context)
@@ -370,3 +370,48 @@ class TestBatchProcessing:
 
         assert result == 0
         mock_client.models.embed_content.assert_not_called()
+
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_raises_when_embedding_count_mismatches_profiles(
+        self, mock_genai, mock_get_supabase
+    ):
+        from dags.ingest_company_intelligence import generate_and_upsert_embeddings
+
+        profiles = [
+            {
+                "ticker_symbol": "VNM",
+                "exchange": "HOSE",
+                "content_type": "company_profile",
+                "company_profile": "Profile 1",
+                "icb_name2": "Consumer",
+                "icb_name3": "Food",
+                "icb_name4": "Dairy",
+            },
+            {
+                "ticker_symbol": "HPG",
+                "exchange": "HOSE",
+                "content_type": "company_profile",
+                "company_profile": "Profile 2",
+                "icb_name2": "Materials",
+                "icb_name3": "Steel",
+                "icb_name4": "Producers",
+            },
+        ]
+
+        mock_ti = MagicMock()
+        mock_ti.xcom_pull.return_value = profiles
+        context = {"ti": mock_ti}
+
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [MagicMock(values=[0.1] * 768)]
+        mock_client.models.embed_content.return_value = mock_resp
+
+        mock_get_supabase.return_value = MagicMock()
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+            with pytest.raises(ValueError, match="Embedding count mismatch"):
+                generate_and_upsert_embeddings(**context)

@@ -4,7 +4,7 @@ Story: prep-3-seed-asset-data
 Architecture: Single Table Inheritance (STI)
 
 Fetches:
-- VN listed instruments (vnstock) → mapped to supported asset_class values, market=VN
+- VN listed instruments (VCI provider) → mapped to supported asset_class values, market=VN
 - US stocks (Wikipedia S&P 500 + yfinance) → asset_class=STOCK, market=US
 - Crypto (CoinGecko) → asset_class=CRYPTO, market=NULL
 - Precious metals (yfinance futures mapping) → asset_class=COMMODITY, market=NULL
@@ -12,16 +12,30 @@ Fetches:
 Schedule: Weekly (Sunday 2 AM)
 """
 
-from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
-from datetime import datetime, timedelta
-import pandas as pd
-import os
 import logging
+import os
 import re
+from datetime import datetime, timedelta
 from io import StringIO
+
+import pandas as pd
 import psycopg2
 import psycopg2.extras
+from airflow import DAG
+from airflow.providers.standard.operators.python import PythonOperator
+
+try:
+    from etl_modules.vci_provider import (
+        fetch_vn_industry_metadata,
+        fetch_vn_listing_symbols,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.vci_provider import (
+        fetch_vn_industry_metadata,
+        fetch_vn_listing_symbols,
+    )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -236,21 +250,16 @@ def deactivate_stale_vn_stock_rows(non_stock_symbols: list[str]) -> int:
 
 def fetch_vn_instruments(**context):
     """
-    Fetch VN listed instruments from vnstock (VCI source)
-    and map provider types to supported assets.asset_class values.
+    Fetch VN listed instruments from the VCI provider and map provider types
+    to supported assets.asset_class values.
     """
-    from vnstock import Listing
+    logger.info("Fetching VN instrument list from VCI provider...")
 
-    listing = Listing(source="VCI")
-
-    logger.info("Fetching VN instrument list from vnstock...")
-
-    # Get all listed VN instruments
-    df_list = listing.symbols_by_exchange()
+    df_list = fetch_vn_listing_symbols()
     df_list = df_list[df_list["exchange"].str.upper() != "DELISTED"]
     if "type" not in df_list.columns:
         logger.warning(
-            "vnstock symbols_by_exchange() returned no type column; defaulting all VN instruments to STOCK"
+            "VCI provider returned no type column; defaulting all VN instruments to STOCK"
         )
         df_list["type"] = "STOCK"
     df_list["asset_class"] = df_list.apply(
@@ -267,10 +276,33 @@ def fetch_vn_instruments(**context):
 
     # Get industry data
     try:
-        df_ind = listing.symbols_by_industries()
+        df_ind = fetch_vn_industry_metadata()
+        if "icb_code" not in df_ind.columns:
+            code_candidates = [
+                column
+                for column in ["icb_code4", "icb_code3", "icb_code2", "icb_code1"]
+                if column in df_ind.columns
+            ]
+            if code_candidates:
+                df_ind = df_ind.copy()
+                df_ind["icb_code"] = df_ind[code_candidates].bfill(axis=1).iloc[:, 0]
+            else:
+                df_ind = df_ind.copy()
+                df_ind["icb_code"] = None
+
+        industry_cols = [
+            column
+            for column in ["symbol", "icb_name2", "icb_name3", "icb_code"]
+            if column in df_ind.columns
+        ]
+        for required in ["icb_name2", "icb_name3", "icb_code"]:
+            if required not in industry_cols:
+                df_ind[required] = None
+                industry_cols.append(required)
+
         df = pd.merge(
             df_list[["symbol", "organ_name", "exchange", "type", "asset_class"]],
-            df_ind[["symbol", "icb_name2", "icb_name3", "icb_code"]],
+            df_ind[industry_cols],
             on="symbol",
             how="left",
         )
@@ -317,10 +349,12 @@ def fetch_vn_instruments(**context):
                 "logo_url": "",
                 "description": "",
                 "external_api_metadata": {
-                    "source_api": "vnstock",
-                    "symbol_type": str(row["type"]) if pd.notna(row["type"]) else "STOCK",
+                    "source_api": "vci",
+                    "symbol_type": str(row["type"])
+                    if pd.notna(row["type"])
+                    else "STOCK",
                 },
-                "source": "vnstock",
+                "source": "vci",
                 "is_active": 1,
             }
         )
@@ -445,8 +479,9 @@ def fetch_crypto(**context):
     → asset_class = 'CRYPTO', market = '' (empty/NULL)
     NOTE: 'coingecko_id' in metadata is CRITICAL for MarketDataService price fetching.
     """
-    from pycoingecko import CoinGeckoAPI
     import time
+
+    from pycoingecko import CoinGeckoAPI
 
     cg = CoinGeckoAPI()
 
@@ -465,14 +500,24 @@ def fetch_crypto(**context):
                 sparkline=False,
             )
             all_coins.extend(coins)
-            time.sleep(1) # Rate limit protection
+            time.sleep(1)  # Rate limit protection
         except Exception as e:
             logger.error(f"Failed to fetch page {page}: {e}")
 
     logger.info(f"Fetched {len(all_coins)} crypto assets")
 
     # Known stablecoins
-    stablecoins = {"USDT", "USDC", "DAI", "BUSD", "TUSD", "USDD", "FRAX", "USDP", "PYUSD"}
+    stablecoins = {
+        "USDT",
+        "USDC",
+        "DAI",
+        "BUSD",
+        "TUSD",
+        "USDD",
+        "FRAX",
+        "USDP",
+        "PYUSD",
+    }
 
     records = []
     # Track symbols to prevent duplicates if any
@@ -480,7 +525,7 @@ def fetch_crypto(**context):
 
     for coin in all_coins:
         symbol_upper = coin["symbol"].upper()
-        
+
         if symbol_upper in seen_symbols:
             continue
         seen_symbols.add(symbol_upper)

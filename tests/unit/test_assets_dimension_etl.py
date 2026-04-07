@@ -16,12 +16,14 @@ import pytest
 class TestFetchVnInstruments:
     """Unit tests for fetch_vn_instruments type-based classification."""
 
-    @patch("vnstock.Listing")
-    def test_maps_provider_types_to_supported_asset_classes(self, mock_listing_class):
+    @patch("dags.assets_dimension_etl.fetch_vn_industry_metadata")
+    @patch("dags.assets_dimension_etl.fetch_vn_listing_symbols")
+    def test_maps_provider_types_to_supported_asset_classes(
+        self, mock_listing_symbols, mock_industry_metadata
+    ):
         from dags import assets_dimension_etl as module
 
-        mock_listing = MagicMock()
-        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+        mock_listing_symbols.return_value = pd.DataFrame(
             {
                 "symbol": [
                     "HPG",
@@ -54,17 +56,25 @@ class TestFetchVnInstruments:
                     "DEBENTURE",
                     None,
                 ],
-                "product_grp_id": ["STO", "FIO", "STO", "STO", "FIO", "STO", "HCX", "STO"],
+                "product_grp_id": [
+                    "STO",
+                    "FIO",
+                    "STO",
+                    "STO",
+                    "FIO",
+                    "STO",
+                    "HCX",
+                    "STO",
+                ],
             }
         )
-        mock_listing.symbols_by_industries.return_value = pd.DataFrame(
+        mock_industry_metadata.return_value = pd.DataFrame(
             {
                 "symbol": ["HPG", "E1VFVN30"],
                 "icb_name2": ["Materials", "Fund"],
                 "icb_name3": ["Steel", "ETF"],
             }
         )
-        mock_listing_class.return_value = mock_listing
 
         captured_records = []
 
@@ -72,8 +82,9 @@ class TestFetchVnInstruments:
             captured_records.extend(records)
             return len(records)
 
-        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert), patch.object(
-            module, "deactivate_stale_vn_stock_rows", return_value=0
+        with (
+            patch.object(module, "upsert_assets_records", side_effect=capture_upsert),
+            patch.object(module, "deactivate_stale_vn_stock_rows", return_value=0),
         ):
             result = module.fetch_vn_instruments()
 
@@ -93,20 +104,21 @@ class TestFetchVnInstruments:
         assert by_symbol["C4G12005"]["external_api_metadata"]["symbol_type"] == "CW"
         assert by_symbol["BONDVN"]["external_api_metadata"]["symbol_type"] == "FU_BOND"
 
-    @patch("vnstock.Listing")
-    def test_keeps_symbols_when_type_column_absent(self, mock_listing_class):
+    @patch("dags.assets_dimension_etl.fetch_vn_industry_metadata")
+    @patch("dags.assets_dimension_etl.fetch_vn_listing_symbols")
+    def test_keeps_symbols_when_type_column_absent(
+        self, mock_listing_symbols, mock_industry_metadata
+    ):
         from dags import assets_dimension_etl as module
 
-        mock_listing = MagicMock()
-        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+        mock_listing_symbols.return_value = pd.DataFrame(
             {
                 "symbol": ["HPG", "VCB"],
                 "organ_name": ["Hoa Phat Group", "Vietcombank"],
                 "exchange": ["HOSE", "HOSE"],
             }
         )
-        mock_listing.symbols_by_industries.side_effect = Exception("industry unavailable")
-        mock_listing_class.return_value = mock_listing
+        mock_industry_metadata.side_effect = Exception("industry unavailable")
 
         captured_records = []
 
@@ -120,14 +132,53 @@ class TestFetchVnInstruments:
         assert result == 2
         assert {row["asset_class"] for row in captured_records} == {"STOCK"}
 
-    @patch("vnstock.Listing")
-    def test_deactivates_stale_stock_rows_for_symbols_reclassified_non_stock(
-        self, mock_listing_class
+    @patch("dags.assets_dimension_etl.fetch_vn_industry_metadata")
+    @patch("dags.assets_dimension_etl.fetch_vn_listing_symbols")
+    def test_merges_when_provider_returns_icb_code4_only(
+        self, mock_listing_symbols, mock_industry_metadata
     ):
         from dags import assets_dimension_etl as module
 
-        mock_listing = MagicMock()
-        mock_listing.symbols_by_exchange.return_value = pd.DataFrame(
+        mock_listing_symbols.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG"],
+                "organ_name": ["Hoa Phat Group"],
+                "exchange": ["HOSE"],
+                "type": ["STOCK"],
+                "product_grp_id": ["STO"],
+            }
+        )
+        mock_industry_metadata.return_value = pd.DataFrame(
+            {
+                "symbol": ["HPG"],
+                "icb_name2": ["Materials"],
+                "icb_name3": ["Steel"],
+                "icb_code4": ["55101010"],
+            }
+        )
+
+        captured_records = []
+
+        def capture_upsert(records):
+            captured_records.extend(records)
+            return len(records)
+
+        with patch.object(module, "upsert_assets_records", side_effect=capture_upsert):
+            result = module.fetch_vn_instruments()
+
+        assert result == 1
+        assert captured_records[0]["sector"] == "Materials"
+        assert captured_records[0]["industry"] == "Steel"
+        assert captured_records[0]["industry_code"] == "55101010"
+
+    @patch("dags.assets_dimension_etl.fetch_vn_industry_metadata")
+    @patch("dags.assets_dimension_etl.fetch_vn_listing_symbols")
+    def test_deactivates_stale_stock_rows_for_symbols_reclassified_non_stock(
+        self, mock_listing_symbols, mock_industry_metadata
+    ):
+        from dags import assets_dimension_etl as module
+
+        mock_listing_symbols.return_value = pd.DataFrame(
             {
                 "symbol": ["HPG", "CLPB2503"],
                 "organ_name": [
@@ -139,15 +190,17 @@ class TestFetchVnInstruments:
                 "product_grp_id": ["STO", "STO"],
             }
         )
-        mock_listing.symbols_by_industries.side_effect = Exception("industry unavailable")
-        mock_listing_class.return_value = mock_listing
+        mock_industry_metadata.side_effect = Exception("industry unavailable")
 
-        with patch.object(module, "upsert_assets_records", return_value=2), patch.object(
-            module,
-            "deactivate_stale_vn_stock_rows",
-            return_value=1,
-            create=True,
-        ) as mock_deactivate:
+        with (
+            patch.object(module, "upsert_assets_records", return_value=2),
+            patch.object(
+                module,
+                "deactivate_stale_vn_stock_rows",
+                return_value=1,
+                create=True,
+            ) as mock_deactivate,
+        ):
             module.fetch_vn_instruments()
 
         mock_deactivate.assert_called_once_with(["CLPB2503"])
