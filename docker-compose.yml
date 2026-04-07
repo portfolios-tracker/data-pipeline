@@ -13,6 +13,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW__API_AUTH__JWT_SECRET}"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__HOSTNAME_CALLABLE: "airflow.utils.net.get_host_ip_address"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
@@ -89,6 +90,8 @@ services:
           --email admin@example.com \
           --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" 2>/dev/null || echo "User already exists"
         chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
+        chmod -R g+rwX /opt/airflow/logs
+        find /opt/airflow/logs -type d -exec chmod g+s {} +
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: "true"
