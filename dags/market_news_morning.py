@@ -6,18 +6,24 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 import os
-import sys
 import re
 
-# Add dags directory to path so we can import etl_modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
-from etl_modules.notifications import (
-    send_success_notification,
-    send_failure_notification,
-    send_telegram_news_summary,
-)
+try:
+    from etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
+    from etl_modules.notifications import (
+        send_success_notification,
+        send_failure_notification,
+        send_telegram_news_summary,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
+    from dags.etl_modules.notifications import (
+        send_success_notification,
+        send_failure_notification,
+        send_telegram_news_summary,
+    )
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -231,4 +237,3 @@ with DAG(
     scored_news = score_news(raw_news)
     load_news(scored_news)
     send_news_digest(scored_news)
-

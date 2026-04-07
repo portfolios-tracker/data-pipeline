@@ -22,10 +22,18 @@ from datetime import datetime, timedelta
 import requests
 from airflow import DAG
 from airflow.sdk import task
-from etl_modules.notifications import (
-    send_failure_notification,
-    send_success_notification,
-)
+try:
+    from etl_modules.notifications import (
+        send_failure_notification,
+        send_success_notification,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.notifications import (
+        send_failure_notification,
+        send_success_notification,
+    )
 
 # Configuration
 API_BASE_URL = os.getenv("NESTJS_API_URL", "http://localhost:3001")

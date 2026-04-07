@@ -1,22 +1,28 @@
-from airflow import DAG
-from airflow.sdk import TaskGroup, task
-from airflow.providers.standard.operators.empty import EmptyOperator
+import os
 from datetime import datetime, timedelta
-from pendulum import timezone
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-import os
-import sys
+from airflow import DAG
+from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.sdk import task
+from pendulum import timezone
 
-# Add dags directory to path so we can import etl_modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from etl_modules.fetcher import fetch_stock_price
-from etl_modules.notifications import (
-    send_success_notification,
-    send_failure_notification,
-)
+try:
+    from etl_modules.fetcher import fetch_stock_price
+    from etl_modules.notifications import (
+        send_failure_notification,
+        send_success_notification,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.fetcher import fetch_stock_price
+    from dags.etl_modules.notifications import (
+        send_failure_notification,
+        send_success_notification,
+    )
 
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
@@ -41,7 +47,6 @@ with DAG(
     tags=["market_data", "maintenance"],
     on_success_callback=send_success_notification,
 ) as dag:
-
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
 
@@ -64,7 +69,7 @@ with DAG(
                     tickers = [row[0] for row in rows]
         finally:
             conn.close()
-        
+
         print(f"Found {len(tickers)} tickers with unprocessed corporate actions.")
         return tickers
 
@@ -76,14 +81,16 @@ with DAG(
 
         end_date = datetime.today().strftime("%Y-%m-%d")
         start_date = (datetime.today() - timedelta(days=365 * 6)).strftime("%Y-%m-%d")
-        print(f"Fetching 6-year history ({start_date} to {end_date}) for tickers: {tickers}")
+        print(
+            f"Fetching 6-year history ({start_date} to {end_date}) for tickers: {tickers}"
+        )
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
             for ticker in tickers:
                 print(f"Processing {ticker}...")
                 df_price = fetch_stock_price(ticker, start_date, end_date)
-                
+
                 if df_price.empty:
                     print(f"Warning: No data fetched for {ticker}. Skipping.")
                     continue
@@ -99,14 +106,14 @@ with DAG(
                     "ticker",
                     "source",
                 ]
-                
+
                 rows = []
                 for _, row in df_price.iterrows():
                     # Handle Pandas Timestamp conversion
                     if isinstance(row.get("trading_date"), pd.Timestamp):
                         row["trading_date"] = row["trading_date"].date()
                     rows.append(tuple(row.get(col) for col in price_cols))
-                
+
                 print(f"Upserting {len(rows)} rows for {ticker}...")
                 with conn:
                     with conn.cursor() as cur:
@@ -127,7 +134,7 @@ with DAG(
                             """,
                             rows,
                         )
-                        
+
                         # Mark corporate actions as processed
                         cur.execute(
                             """
@@ -135,7 +142,7 @@ with DAG(
                             SET processed_at = NOW()
                             WHERE ticker = %s AND processed_at IS NULL
                             """,
-                            (ticker,)
+                            (ticker,),
                         )
                         print(f"Marked corporate actions for {ticker} as processed.")
         finally:

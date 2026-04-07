@@ -7,23 +7,35 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 import os
-import sys
 
-# Add dags directory to path so we can import etl_modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from etl_modules.fetcher import (
-    fetch_stock_price,
-    fetch_financial_ratios,
-    fetch_balance_sheet,
-    fetch_corporate_events,
-    fetch_income_stmt,
-    get_active_vn_stock_tickers,
-)
-from etl_modules.notifications import (
-    send_success_notification,
-    send_failure_notification,
-)
+try:
+    from etl_modules.fetcher import (
+        fetch_stock_price,
+        fetch_financial_ratios,
+        fetch_balance_sheet,
+        fetch_corporate_events,
+        fetch_income_stmt,
+        get_active_vn_stock_tickers,
+    )
+    from etl_modules.notifications import (
+        send_success_notification,
+        send_failure_notification,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.fetcher import (
+        fetch_stock_price,
+        fetch_financial_ratios,
+        fetch_balance_sheet,
+        fetch_corporate_events,
+        fetch_income_stmt,
+        get_active_vn_stock_tickers,
+    )
+    from dags.etl_modules.notifications import (
+        send_success_notification,
+        send_failure_notification,
+    )
 
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")

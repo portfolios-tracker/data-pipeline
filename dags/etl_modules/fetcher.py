@@ -8,7 +8,12 @@ from vnstock import Company, Finance, Quote
 
 from supabase import create_client
 
-from .cache import cached_data
+try:
+    from etl_modules.cache import cached_data
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.cache import cached_data
 
 # ---------------------------------------------------------------------------
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
