@@ -22,7 +22,7 @@ def fetch_tickers_for_refresh(cur: Any, events_lookback_days: int) -> list[str]:
         SELECT DISTINCT a.symbol
         FROM market_data.corporate_events ce
         JOIN market_data.assets a
-            ON a.asset_id = ce.asset_id
+            ON a.id = ce.asset_id
         LEFT JOIN (
             SELECT ticker, MAX(ingested_at) AS last_price_ingested_at
             FROM market_data.market_data_prices

@@ -42,5 +42,6 @@ class TestFetchTickersForRefresh:
         executed_sql = mock_cursor.execute.call_args[0][0]
         assert "FROM market_data.corporate_events ce" in executed_sql
         assert "JOIN market_data.assets a" in executed_sql
+        assert "ON a.id = ce.asset_id" in executed_sql
         assert "market_data.market_data_prices" in executed_sql
         assert mock_cursor.execute.call_args[0][1] == (14,)
