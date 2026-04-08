@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 _STATUS_PATTERN = re.compile(r"\bHTTP\s+(\d{3})\b")
-_GATE_PREFIX = "rate_governor:gate"
+_BUCKET_PREFIX = "rate_governor:bucket"
 
 
 @dataclass(frozen=True)
@@ -175,24 +175,41 @@ def _acquire_source_slot(source: str, min_interval_seconds: float) -> None:
         _acquire_local_slot(key, min_interval_seconds)
         return
 
-    gate_key = f"{_GATE_PREFIX}:{key}"
-    ttl_ms = max(1, int(min_interval_seconds * 1000))
-    token = uuid.uuid4().hex
-    max_wait_seconds = max(3.0, min_interval_seconds * 20)
+    bucket_key = f"{_BUCKET_PREFIX}:{key}"
+    if min_interval_seconds >= 1.0:
+        max_tokens = 1
+        window_ms = max(1, int(min_interval_seconds * 1000))
+    else:
+        max_tokens = max(1, int(1.0 / min_interval_seconds))
+        window_ms = 1000
+
+    max_wait_seconds = max(5.0, min_interval_seconds * 30)
     deadline = time.monotonic() + max_wait_seconds
 
     while time.monotonic() < deadline:
+        now_ms = int(time.time() * 1000)
+        window_start = now_ms - window_ms
         try:
-            acquired = redis_client.set(gate_key, token, nx=True, px=ttl_ms)
+            pipe = redis_client.pipeline()
+            pipe.zremrangebyscore(bucket_key, 0, window_start)
+            pipe.zcard(bucket_key)
+            _, current_count = pipe.execute()
+
+            if current_count < max_tokens:
+                token = f"{now_ms}-{uuid.uuid4().hex[:8]}"
+                pipe = redis_client.pipeline()
+                pipe.zadd(bucket_key, {token: now_ms})
+                pipe.pexpire(bucket_key, window_ms * 2)
+                pipe.execute()
+                return
         except Exception:
             _acquire_local_slot(key, min_interval_seconds)
             return
-        if acquired:
-            return
-        time.sleep(min(0.05, min_interval_seconds))
+
+        time.sleep(min(0.05, max(0.01, min_interval_seconds * 0.5)))
 
     raise RuntimeError(
-        f"Rate-limit gate acquisition timed out for source={key} after {max_wait_seconds:.1f}s"
+        f"Rate-limit slot timed out for source={key} after {max_wait_seconds:.1f}s"
     )
 
 

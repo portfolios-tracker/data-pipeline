@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from functools import lru_cache
 from datetime import UTC, date, datetime, timedelta, timezone
+from io import StringIO
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -27,6 +27,13 @@ except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
         raise
     from dags.etl_modules.request_governor import governed_call
+
+try:
+    from etl_modules.cache import get_redis_client
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.cache import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +55,8 @@ DEFAULT_HEADERS = {
 
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
 _DOTNET_DATE_PATTERN = re.compile(r"/Date\((\d+)(?:[+-]\d+)?\)/")
+_METADATA_REDIS_KEY = "vci:financial_ratio_metadata"
+_METADATA_TTL_SECONDS = 3600
 
 
 def _camel_to_snake(name: str) -> str:
@@ -125,8 +134,21 @@ def _company_type_code(symbol: str) -> str:
     return "CT"
 
 
-@lru_cache(maxsize=1)
-def _financial_ratio_metadata_cached() -> pd.DataFrame:
+def _financial_ratio_metadata() -> pd.DataFrame:
+    redis_client: Any = get_redis_client()
+    if redis_client is not None:
+        try:
+            cached = redis_client.get(_METADATA_REDIS_KEY)
+            if cached:
+                cached_text = (
+                    cached.decode("utf-8")
+                    if isinstance(cached, (bytes, bytearray))
+                    else str(cached)
+                )
+                return pd.read_json(StringIO(cached_text), orient="records")
+        except Exception as exc:
+            logger.warning("Failed to load cached financial ratio metadata: %s", exc)
+
     query = """
     query Query {
       ListFinancialRatio {
@@ -147,15 +169,20 @@ def _financial_ratio_metadata_cached() -> pd.DataFrame:
     data = _graphql(query)
     rows = data.get("ListFinancialRatio") or []
     frame = pd.DataFrame(rows)
-    if frame.empty:
-        return frame
-    frame.columns = [_camel_to_snake(column) for column in frame.columns]
+    if not frame.empty:
+        frame.columns = [_camel_to_snake(column) for column in frame.columns]
+
+    if redis_client is not None:
+        try:
+            redis_client.set(
+                _METADATA_REDIS_KEY,
+                frame.to_json(orient="records"),
+                ex=_METADATA_TTL_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning("Failed to cache financial ratio metadata: %s", exc)
+
     return frame
-
-
-def _financial_ratio_metadata() -> pd.DataFrame:
-    frame = _financial_ratio_metadata_cached()
-    return frame.copy(deep=True)
 
 
 def _build_financial_frame(
@@ -646,7 +673,7 @@ def fetch_company_overview(symbol: str) -> pd.DataFrame:
             symbol,
             exc,
         )
-        return "CT"
+        return pd.DataFrame()
     listing_info = data.get("CompanyListingInfo") or {}
     if not listing_info:
         return pd.DataFrame()

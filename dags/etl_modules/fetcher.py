@@ -208,7 +208,9 @@ def _normalize_metric_label(label: object) -> str:
     normalized = normalized.replace("đ", "d").replace("Đ", "D")
     normalized = normalized.lower()
     normalized = normalized.replace("&", " and ")
-    cleaned = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in normalized)
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch.isspace()) else " " for ch in normalized
+    )
     return " ".join(cleaned.split())
 
 
@@ -218,6 +220,24 @@ def _statement_cache_key(kind: str, symbol: str, asset_id: str) -> dict[str, str
         "symbol": str(symbol),
         "asset_id": str(asset_id),
         "version": "2026-04-08",
+    }
+
+
+def _ratio_cache_key(symbol: str, asset_id: str) -> dict[str, str]:
+    return {
+        "kind": "financial_ratios",
+        "symbol": str(symbol),
+        "asset_id": str(asset_id),
+        "version": "2026-04-08-v2",
+    }
+
+
+def _balance_sheet_cache_key(symbol: str, asset_id: str) -> dict[str, str]:
+    return {
+        "kind": "balance_sheet",
+        "symbol": str(symbol),
+        "asset_id": str(asset_id),
+        "version": "2026-04-08-v2",
     }
 
 
@@ -256,7 +276,10 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
     return df
 
 
-@cached_data(ttl_seconds=86400)  # 24 hours
+@cached_data(
+    ttl_seconds=86400,
+    key_fn=lambda symbol, asset_id: _ratio_cache_key(symbol, asset_id),
+)  # 24 hours
 def fetch_financial_ratios(symbol, asset_id):
     logging.info(f"Fetching ratios for {symbol}...")
     try:
@@ -264,12 +287,20 @@ def fetch_financial_ratios(symbol, asset_id):
         if df is None or df.empty:
             return pd.DataFrame()
 
-        col_list = df.columns.tolist()
+        col_candidates = [
+            (column, _normalize_metric_label(column)) for column in df.columns.tolist()
+        ]
 
-        def get_col(keyword):
-            for c in col_list:
-                if keyword in c:
-                    return c
+        def get_col(*keywords):
+            normalized_keywords = [
+                _normalize_metric_label(keyword)
+                for keyword in keywords
+                if str(keyword or "").strip()
+            ]
+            for keyword in normalized_keywords:
+                for original, normalized in col_candidates:
+                    if keyword in normalized:
+                        return original
             return None
 
         year_col = get_col("yearReport")
@@ -281,38 +312,106 @@ def fetch_financial_ratios(symbol, asset_id):
         out_df["year"] = df[year_col].fillna(0).astype(int)
         out_df["quarter"] = df[quarter_col].fillna(0).astype(int)
 
-        # Mapping Dictionary: {Target: Source_Keyword}
-        metric_map = {
-            "pe_ratio": "P/E",
-            "pb_ratio": "P/B",
-            "ps_ratio": "P/S",
-            "p_cashflow_ratio": "P/Cash Flow",
-            "eps": "EPS",
-            "bvps": "BVPS",
-            "market_cap": "Market Capital",
-            "roe": "ROE",
-            "roa": "ROA",
-            "roic": "ROIC",
-            "net_profit_margin": "Net Profit Margin",
-            "debt_to_equity": "Debt/Equity",
-            "financial_leverage": "Financial Leverage",
-            "dividend_yield": "Dividend yield",
-            "current_ratio": "Current Ratio",
-            "quick_ratio": "Quick Ratio",
-            "interest_coverage": "Interest Coverage",
-            "asset_turnover": "Asset Turnover",
-            "inventory_turnover": "Inventory Turnover",
-            "receivable_turnover": "Receivable Turnover",
-            "revenue_growth": "Revenue Growth",
-            "profit_growth": "Profit Growth",
-            "operating_margin": "Operating Margin",
-            "gross_margin": "Gross Margin",
-            "free_cash_flow": "Free Cash Flow",
+        metric_aliases = {
+            "pe_ratio": ["P/E"],
+            "pb_ratio": ["P/B"],
+            "ps_ratio": ["P/S"],
+            "p_cashflow_ratio": ["P/Cash Flow"],
+            "eps": ["EPS"],
+            "bvps": ["BVPS"],
+            "market_cap": ["Market Capital"],
+            "roe": ["ROE"],
+            "roa": ["ROA"],
+            "roic": ["ROIC"],
+            "net_profit_margin": ["Net Profit Margin"],
+            "debt_to_equity": ["Debt/Equity"],
+            "financial_leverage": ["Financial Leverage"],
+            "dividend_yield": ["Dividend yield"],
+            "current_ratio": ["Current Ratio"],
+            "quick_ratio": ["Quick Ratio"],
+            "interest_coverage": ["Interest Coverage"],
+            "asset_turnover": ["Asset Turnover"],
+            "inventory_turnover": ["Inventory Turnover"],
+            "receivable_turnover": [
+                "Receivable Turnover",
+                "Accounts Receivable Turnover",
+            ],
+            "revenue_growth": ["Revenue Growth", "Revenue YoY"],
+            "profit_growth": [
+                "Profit Growth",
+                "Net Profit YoY",
+                "Profit/Loss after tax YoY",
+                "Attribute to parent company YoY",
+            ],
+            "operating_margin": ["Operating Margin", "Operating Profit Margin"],
+            "gross_margin": ["Gross Margin", "Gross Profit Margin"],
+            "free_cash_flow": ["Free Cash Flow"],
         }
 
-        for target, keyword in metric_map.items():
-            src_col = get_col(keyword)
-            out_df[target] = df[src_col] if src_col else 0.0
+        for target, aliases in metric_aliases.items():
+            src_col = get_col(*aliases)
+            out_df[target] = (
+                pd.to_numeric(df[src_col], errors="coerce")
+                if src_col
+                else pd.Series(np.nan, index=df.index)
+            )
+
+        revenue_col = get_col("Revenue")
+        revenue_series = (
+            pd.to_numeric(df[revenue_col], errors="coerce")
+            if revenue_col
+            else pd.Series(np.nan, index=df.index)
+        )
+
+        operating_profit_col = get_col("Operating Profit/Loss")
+        if (
+            out_df["operating_margin"].isna().all()
+            and operating_profit_col
+            and not revenue_series.isna().all()
+        ):
+            operating_profit_series = pd.to_numeric(
+                df[operating_profit_col], errors="coerce"
+            )
+            out_df["operating_margin"] = operating_profit_series.divide(
+                revenue_series.replace(0, np.nan)
+            )
+
+        gross_profit_col = get_col("Gross Profit")
+        if (
+            out_df["gross_margin"].isna().all()
+            and gross_profit_col
+            and not revenue_series.isna().all()
+        ):
+            gross_profit_series = pd.to_numeric(df[gross_profit_col], errors="coerce")
+            out_df["gross_margin"] = gross_profit_series.divide(
+                revenue_series.replace(0, np.nan)
+            )
+
+        accounts_receivable_col = get_col("Accounts Receivables")
+        if (
+            out_df["receivable_turnover"].isna().all()
+            and accounts_receivable_col
+            and not revenue_series.isna().all()
+        ):
+            receivable_series = pd.to_numeric(
+                df[accounts_receivable_col], errors="coerce"
+            )
+            out_df["receivable_turnover"] = revenue_series.divide(
+                receivable_series.replace(0, np.nan)
+            )
+
+        operating_cashflow_col = get_col(
+            "Net cash inflows/outflows from operating activities"
+        )
+        if out_df["free_cash_flow"].isna().all() and operating_cashflow_col:
+            out_df["free_cash_flow"] = pd.to_numeric(
+                df[operating_cashflow_col], errors="coerce"
+            )
+
+        for column in metric_aliases:
+            out_df[column] = pd.to_numeric(out_df[column], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
 
         # 3. Generate Date
         def get_quarter_end(row):
@@ -329,8 +428,6 @@ def fetch_financial_ratios(symbol, asset_id):
             return pd.Timestamp(f"{y}-01-01").date()
 
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
-        out_df = clean_decimal_cols(out_df, list(metric_map.keys()))
-
         out_df["ticker"] = symbol
         out_df["asset_id"] = asset_id
 
@@ -343,7 +440,9 @@ def fetch_financial_ratios(symbol, asset_id):
 
 @cached_data(
     ttl_seconds=86400,
-    key_fn=lambda symbol, asset_id: _statement_cache_key("income_stmt", symbol, asset_id),
+    key_fn=lambda symbol, asset_id: _statement_cache_key(
+        "income_stmt", symbol, asset_id
+    ),
 )  # 24 hours
 def fetch_income_stmt(symbol, asset_id):
     """
@@ -432,15 +531,19 @@ def fetch_income_stmt(symbol, asset_id):
 
     except Exception as e:
         if _is_transient_vci_failure(e):
-            logging.warning("Transient VCI failure fetching income stmt for %s: %s", symbol, e)
+            logging.warning(
+                "Transient VCI failure fetching income stmt for %s: %s", symbol, e
+            )
         else:
-            logging.error(f"Error fetching income stmt for {symbol}: {e}", exc_info=True)
+            logging.error(
+                f"Error fetching income stmt for {symbol}: {e}", exc_info=True
+            )
         return pd.DataFrame()
 
 
 @cached_data(
     ttl_seconds=86400,
-    key_fn=lambda symbol, asset_id: _statement_cache_key("balance_sheet", symbol, asset_id),
+    key_fn=lambda symbol, asset_id: _balance_sheet_cache_key(symbol, asset_id),
 )  # 24 hours
 def fetch_balance_sheet(symbol, asset_id):
     try:
@@ -450,8 +553,18 @@ def fetch_balance_sheet(symbol, asset_id):
             return pd.DataFrame()
 
         metric_aliases = {
-            "total_assets": ["Total Asset", "Total Assets", "Tổng tài sản"],
-            "total_liabilities": ["Total Liabilities", "Tổng nợ phải trả", "Nợ phải trả"],
+            "total_assets": [
+                "Total Asset",
+                "Total Assets",
+                "TOTAL ASSETS",
+                "Tổng tài sản",
+            ],
+            "total_liabilities": [
+                "Total Liabilities",
+                "LIABILITIES",
+                "Tổng nợ phải trả",
+                "Nợ phải trả",
+            ],
             "total_equity": ["Owner's Equity", "Total Equity", "Vốn chủ sở hữu"],
             "cash_and_equivalents": [
                 "Cash & Equivalents",
@@ -461,16 +574,21 @@ def fetch_balance_sheet(symbol, asset_id):
             "short_term_assets": [
                 "Short-term Asset",
                 "Short Term Assets",
+                "Current Assets",
+                "CURRENT ASSETS",
                 "Tài sản ngắn hạn",
             ],
             "long_term_assets": [
                 "Long-term Asset",
                 "Long Term Assets",
+                "Non-current Assets",
+                "NON-CURRENT ASSETS",
                 "Tài sản dài hạn",
             ],
             "short_term_liabilities": [
                 "Short-term Liability",
                 "Short Term Liabilities",
+                "Current liabilities",
                 "Nợ ngắn hạn",
             ],
             "long_term_liabilities": [
@@ -522,7 +640,39 @@ def fetch_balance_sheet(symbol, asset_id):
 
         for col in required_metrics:
             if col not in df_final.columns:
-                df_final[col] = 0.0
+                df_final[col] = np.nan
+
+        for col in required_metrics:
+            df_final[col] = pd.to_numeric(df_final[col], errors="coerce")
+
+        total_assets = df_final["total_assets"]
+        total_equity = df_final["total_equity"]
+        total_liabilities = df_final["total_liabilities"]
+        short_term_assets = df_final["short_term_assets"]
+        long_term_assets = df_final["long_term_assets"]
+        short_term_liabilities = df_final["short_term_liabilities"]
+        long_term_liabilities = df_final["long_term_liabilities"]
+
+        df_final["total_liabilities"] = total_liabilities.fillna(
+            short_term_liabilities + long_term_liabilities
+        )
+        df_final["total_liabilities"] = df_final["total_liabilities"].fillna(
+            total_assets - total_equity
+        )
+
+        df_final["short_term_assets"] = short_term_assets.fillna(
+            total_assets - long_term_assets
+        )
+        df_final["long_term_assets"] = long_term_assets.fillna(
+            total_assets - short_term_assets
+        )
+
+        df_final["short_term_liabilities"] = short_term_liabilities.fillna(
+            df_final["total_liabilities"] - long_term_liabilities
+        )
+        df_final["long_term_liabilities"] = long_term_liabilities.fillna(
+            df_final["total_liabilities"] - short_term_liabilities
+        )
 
         df_final = clean_decimal_cols(df_final, required_metrics)
         df_final["asset_id"] = asset_id
@@ -535,7 +685,9 @@ def fetch_balance_sheet(symbol, asset_id):
                 "Transient VCI failure fetching balance sheet for %s: %s", symbol, e
             )
         else:
-            logging.error(f"Error fetching balance sheet for {symbol}: {e}", exc_info=True)
+            logging.error(
+                f"Error fetching balance sheet for {symbol}: {e}", exc_info=True
+            )
         return pd.DataFrame()
 
 
@@ -681,8 +833,12 @@ def fetch_dividends(symbol, asset_id):
             df[col] = None
 
     df["exercise_date"] = pd.to_datetime(df["exercise_date"], errors="coerce").dt.date
-    df["cash_year"] = pd.to_numeric(df["cash_year"], errors="coerce").fillna(0).astype(int)
-    df = clean_decimal_cols(df, ["cash_dividend_percentage", "stock_dividend_percentage"])
+    df["cash_year"] = (
+        pd.to_numeric(df["cash_year"], errors="coerce").fillna(0).astype(int)
+    )
+    df = clean_decimal_cols(
+        df, ["cash_dividend_percentage", "stock_dividend_percentage"]
+    )
     return df[required_cols]
 
 

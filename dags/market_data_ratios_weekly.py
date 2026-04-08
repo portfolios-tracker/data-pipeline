@@ -1,27 +1,31 @@
-from airflow import DAG
-from airflow.sdk import task
+import math
+import os
 from datetime import datetime, timedelta
 from itertools import islice
-import math
-from pendulum import timezone
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-import os
+from airflow import DAG
+from airflow.sdk import task
+from pendulum import timezone
 
 try:
     from etl_modules.fetcher import fetch_financial_ratios, get_active_vn_stock_tickers
     from etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
         raise
-    from dags.etl_modules.fetcher import fetch_financial_ratios, get_active_vn_stock_tickers
+    from dags.etl_modules.fetcher import (
+        fetch_financial_ratios,
+        get_active_vn_stock_tickers,
+    )
     from dags.etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 
 # CONFIG
@@ -176,6 +180,7 @@ with DAG(
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
+
     @task
     def extract_ratios():
         ratio_data = []
@@ -197,7 +202,9 @@ with DAG(
             final_ratio_df = pd.concat(ratio_data, ignore_index=True)
             # Convert date objects to strings for JSON serialization
             if "fiscal_date" in final_ratio_df.columns:
-                final_ratio_df["fiscal_date"] = final_ratio_df["fiscal_date"].astype(str)
+                final_ratio_df["fiscal_date"] = final_ratio_df["fiscal_date"].astype(
+                    str
+                )
             records = final_ratio_df.to_dict("records")
         else:
             records = []
@@ -210,7 +217,11 @@ with DAG(
         _report_failed_symbols("load_ratios (extract)", failed_symbols)
         if not records:
             print("No ratio data to load.")
-            return {"failed_symbols": failed_symbols, "failed_rows": [], "failed_batches": []}
+            return {
+                "failed_symbols": failed_symbols,
+                "failed_rows": [],
+                "failed_batches": [],
+            }
 
         if not SUPABASE_DB_URL:
             raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
@@ -264,7 +275,7 @@ with DAG(
                     row_values[column] = sanitized_value
                     if did_sanitize:
                         non_finite_count += 1
-                rows.append(tuple(row_values.get(col, 0) for col in ratio_cols))
+                rows.append(tuple(row_values.get(col) for col in ratio_cols))
             except Exception as exc:
                 failed_rows.append(
                     {
@@ -279,7 +290,9 @@ with DAG(
                 f"(count={non_finite_count})"
             )
 
-        print(f"Upserting {len(rows)} financial ratio rows into market_data.financial_ratios...")
+        print(
+            f"Upserting {len(rows)} financial ratio rows into market_data.financial_ratios..."
+        )
         try:
             failed_batches = _upsert_rows_in_batches(
                 conn,

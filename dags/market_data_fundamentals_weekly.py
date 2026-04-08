@@ -1,13 +1,14 @@
-from airflow import DAG
-from airflow.sdk import TaskGroup, task
-from airflow.providers.standard.operators.empty import EmptyOperator
+import os
 from datetime import datetime, timedelta
 from itertools import islice
-from pendulum import timezone
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-import os
+from airflow import DAG
+from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.sdk import TaskGroup, task
+from pendulum import timezone
 
 try:
     from etl_modules.fetcher import (
@@ -16,8 +17,8 @@ try:
         get_active_vn_stock_tickers,
     )
     from etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
@@ -28,12 +29,13 @@ except ModuleNotFoundError as exc:
         get_active_vn_stock_tickers,
     )
     from dags.etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
+VCI_GRAPHQL_POOL = "vci_graphql"
 
 default_args = {
     "owner": "data_engineer",
@@ -138,6 +140,7 @@ with DAG(
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
+
     @task
     def extract_income_statements():
         income_data = []
@@ -172,7 +175,11 @@ with DAG(
         _report_failed_symbols("load_income_statements (extract)", failed_symbols)
         if not records:
             print("No income statement data to load.")
-            return {"failed_symbols": failed_symbols, "failed_rows": [], "failed_batches": []}
+            return {
+                "failed_symbols": failed_symbols,
+                "failed_rows": [],
+                "failed_batches": [],
+            }
 
         if not SUPABASE_DB_URL:
             raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
@@ -180,7 +187,9 @@ with DAG(
         conn = psycopg2.connect(SUPABASE_DB_URL)
 
         try:
-            print(f"Upserting {len(records)} income statement rows into market_data.income_statements...")
+            print(
+                f"Upserting {len(records)} income statement rows into market_data.income_statements..."
+            )
             inc_cols = [
                 "asset_id",
                 "fiscal_date",
@@ -205,7 +214,9 @@ with DAG(
                 asset_id = row.get("asset_id")
                 try:
                     row_values = dict(row)
-                    row_values["fiscal_date"] = _parse_date_value(row.get("fiscal_date"))
+                    row_values["fiscal_date"] = _parse_date_value(
+                        row.get("fiscal_date")
+                    )
                     inc_rows.append(tuple(row_values.get(col) for col in inc_cols))
                 except Exception as exc:
                     failed_rows.append(
@@ -245,7 +256,9 @@ with DAG(
                 inc_rows,
                 table_name="market_data.income_statements",
             )
-            _report_failed_symbols("load_income_statements (row conversion)", failed_rows)
+            _report_failed_symbols(
+                "load_income_statements (row conversion)", failed_rows
+            )
         finally:
             conn.close()
         return {
@@ -288,7 +301,11 @@ with DAG(
         _report_failed_symbols("load_balance_sheets (extract)", failed_symbols)
         if not records:
             print("No balance sheet data to load.")
-            return {"failed_symbols": failed_symbols, "failed_rows": [], "failed_batches": []}
+            return {
+                "failed_symbols": failed_symbols,
+                "failed_rows": [],
+                "failed_batches": [],
+            }
 
         if not SUPABASE_DB_URL:
             raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
@@ -296,7 +313,9 @@ with DAG(
         conn = psycopg2.connect(SUPABASE_DB_URL)
 
         try:
-            print(f"Upserting {len(records)} balance sheet rows into market_data.balance_sheets...")
+            print(
+                f"Upserting {len(records)} balance sheet rows into market_data.balance_sheets..."
+            )
             bal_cols = [
                 "asset_id",
                 "fiscal_date",
@@ -317,7 +336,9 @@ with DAG(
                 asset_id = row.get("asset_id")
                 try:
                     row_values = dict(row)
-                    row_values["fiscal_date"] = _parse_date_value(row.get("fiscal_date"))
+                    row_values["fiscal_date"] = _parse_date_value(
+                        row.get("fiscal_date")
+                    )
                     bal_rows.append(tuple(row_values.get(col) for col in bal_cols))
                 except Exception as exc:
                     failed_rows.append(
@@ -362,12 +383,14 @@ with DAG(
         }
 
     with TaskGroup("fundamental_pipeline", tooltip="Income Statements") as fund_group:
-        e_inc = extract_income_statements()
+        e_inc = extract_income_statements.override(pool=VCI_GRAPHQL_POOL)()
         l_inc = load_income_statements(e_inc)
         e_inc >> l_inc
 
-    with TaskGroup("balance_sheet_group", tooltip="Quarterly Balance Sheets") as balance_group:
-        e_bal = extract_balance_sheets()
+    with TaskGroup(
+        "balance_sheet_group", tooltip="Quarterly Balance Sheets"
+    ) as balance_group:
+        e_bal = extract_balance_sheets.override(pool=VCI_GRAPHQL_POOL)()
         l_bal = load_balance_sheets(e_bal)
         e_bal >> l_bal
 

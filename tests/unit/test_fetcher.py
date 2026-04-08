@@ -296,6 +296,33 @@ class TestFetchFinancialRatios:
         assert "pe_ratio" in result.columns
         assert "roe" in result.columns
 
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    def test_alias_and_derived_metric_mapping_populates_extended_fields(
+        self, mock_ratio_frame
+    ):
+        mock_ratio_frame.return_value = pd.DataFrame(
+            {
+                "yearReport": [2025],
+                "lengthReport": [4],
+                "Revenue (Bn. VND)": [1000.0],
+                "Revenue YoY (%)": [0.12],
+                "Operating Profit/Loss": [220.0],
+                "Gross Profit": [500.0],
+                "Accounts Receivables": [250.0],
+                "Attribute to parent company YoY (%)": [0.08],
+                "Net cash inflows/outflows from operating activities": [150.0],
+            }
+        )
+
+        result = fetch_financial_ratios("HPG", "dummy_asset_id_v2")
+
+        assert result["revenue_growth"].iloc[0] == pytest.approx(0.12)
+        assert result["profit_growth"].iloc[0] == pytest.approx(0.08)
+        assert result["operating_margin"].iloc[0] == pytest.approx(0.22)
+        assert result["gross_margin"].iloc[0] == pytest.approx(0.5)
+        assert result["receivable_turnover"].iloc[0] == pytest.approx(4.0)
+        assert result["free_cash_flow"].iloc[0] == pytest.approx(150.0)
+
 
 # ============================================================================
 # Placeholder tests for other functions (to be expanded)
@@ -518,6 +545,36 @@ class TestFetchBalanceSheet:
         assert result["total_equity"].iloc[0] == 1_200_000
         assert result["cash_and_equivalents"].iloc[0] == 200_000
 
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    def test_balance_sheet_maps_vci_uppercase_and_derives_missing_totals(
+        self, mock_balance_sheet_frame, _mock_get_redis_client
+    ):
+        mock_balance_sheet_frame.return_value = pd.DataFrame(
+            {
+                "TOTAL ASSETS": [1_000_000],
+                "OWNER'S EQUITY": [600_000],
+                "CURRENT ASSETS": [300_000],
+                "NON-CURRENT ASSETS": [700_000],
+                "Current liabilities": [200_000],
+                "Long-term liabilities": [200_000],
+                "Cash and cash equivalents": [120_000],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_balance_sheet("VCI", "asset-vci")
+
+        assert len(result) == 1
+        assert result["total_assets"].iloc[0] == 1_000_000
+        assert result["short_term_assets"].iloc[0] == 300_000
+        assert result["long_term_assets"].iloc[0] == 700_000
+        assert result["short_term_liabilities"].iloc[0] == 200_000
+        assert result["long_term_liabilities"].iloc[0] == 200_000
+        # Derived from short + long liabilities (or total_assets - total_equity)
+        assert result["total_liabilities"].iloc[0] == 400_000
+
 
 @pytest.mark.unit
 class TestFetchDividends:
@@ -553,7 +610,9 @@ class TestFetchDividends:
 
     @patch("dags.etl_modules.fetcher.fetch_vietstock_dividends_frame")
     def test_dividends_missing_fields_filled(self, mock_dividends_frame):
-        mock_dividends_frame.return_value = pd.DataFrame({"exercise_date": ["2024-06-15"]})
+        mock_dividends_frame.return_value = pd.DataFrame(
+            {"exercise_date": ["2024-06-15"]}
+        )
 
         result = fetch_dividends("HPG", "dummy_asset_id")
         assert not result.empty
