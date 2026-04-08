@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
-
 from dags import market_data_ratios_weekly
 
 
@@ -10,8 +10,10 @@ def test_weekly_ratios_dag_has_expected_identity_schedule_and_tasks():
     assert market_data_ratios_weekly.dag.dag_id == "market_data_ratios_weekly"
     assert market_data_ratios_weekly.dag.schedule == "0 19 * * 0"
     assert sorted(task.task_id for task in market_data_ratios_weekly.dag.tasks) == [
-        "extract_ratios",
-        "load_ratios",
+        "chunk_ratio_assets",
+        "finalize_ratio_load",
+        "list_ratio_assets",
+        "process_ratio_chunk",
     ]
 
 
@@ -61,18 +63,23 @@ def test_upsert_rows_in_batches_continues_on_failed_batch(mock_execute_values):
 
 
 @pytest.mark.unit
-def test_unpack_payload_supports_dict_and_list():
-    records, failed = market_data_ratios_weekly._unpack_payload(
-        {"records": [{"asset_id": "a1"}], "failed_symbols": [{"symbol": "AAA"}]}
-    )
-    assert records == [{"asset_id": "a1"}]
-    assert failed == [{"symbol": "AAA"}]
+def test_chunk_ratio_assets_splits_assets_by_batch_size(monkeypatch):
+    monkeypatch.setattr(market_data_ratios_weekly, "DB_UPSERT_BATCH_SIZE", 2)
+    assets = [
+        {"symbol": "AAA", "asset_id": "1"},
+        {"symbol": "BBB", "asset_id": "2"},
+        {"symbol": "CCC", "asset_id": "3"},
+        {"symbol": "DDD", "asset_id": "4"},
+        {"symbol": "EEE", "asset_id": "5"},
+    ]
 
-    legacy_records, legacy_failed = market_data_ratios_weekly._unpack_payload(
-        [{"asset_id": "a2"}]
-    )
-    assert legacy_records == [{"asset_id": "a2"}]
-    assert legacy_failed == []
+    chunks = market_data_ratios_weekly.chunk_ratio_assets.function(assets)
+
+    assert len(chunks) == 3
+    assert chunks[0]["chunk_index"] == 1
+    assert len(chunks[0]["assets"]) == 2
+    assert chunks[2]["chunk_index"] == 3
+    assert len(chunks[2]["assets"]) == 1
 
 
 @pytest.mark.unit
@@ -85,8 +92,12 @@ def test_parse_date_value_handles_iso_and_sentinel_values():
 @pytest.mark.unit
 def test_sanitize_numeric_preserves_large_finite_values_and_drops_non_finite():
     finite, finite_flag = market_data_ratios_weekly._sanitize_numeric_value(100000.0)
-    infinite, infinite_flag = market_data_ratios_weekly._sanitize_numeric_value(float("inf"))
-    nan_value, nan_flag = market_data_ratios_weekly._sanitize_numeric_value(float("nan"))
+    infinite, infinite_flag = market_data_ratios_weekly._sanitize_numeric_value(
+        float("inf")
+    )
+    nan_value, nan_flag = market_data_ratios_weekly._sanitize_numeric_value(
+        float("nan")
+    )
 
     assert finite == pytest.approx(100000.0)
     assert finite_flag is False
@@ -99,8 +110,9 @@ def test_sanitize_numeric_preserves_large_finite_values_and_drops_non_finite():
 @pytest.mark.unit
 @patch("dags.market_data_ratios_weekly.psycopg2.connect")
 @patch("dags.market_data_ratios_weekly.psycopg2.extras.execute_values")
-def test_load_ratios_preserves_large_finite_values_before_upsert(
-    mock_execute_values, mock_connect, monkeypatch
+@patch("dags.market_data_ratios_weekly.fetch_financial_ratios")
+def test_process_ratio_chunk_preserves_large_finite_values_before_upsert(
+    mock_fetch_financial_ratios, mock_execute_values, mock_connect, monkeypatch
 ):
     monkeypatch.setattr(
         market_data_ratios_weekly, "SUPABASE_DB_URL", "postgresql://example.local/test"
@@ -122,8 +134,8 @@ def test_load_ratios_preserves_large_finite_values_before_upsert(
 
     mock_execute_values.side_effect = _capture
 
-    payload = {
-        "records": [
+    mock_fetch_financial_ratios.return_value = pd.DataFrame(
+        [
             {
                 "asset_id": "1816833c-6a63-4441-ab32-8a65660c23da",
                 "ticker": "BMP",
@@ -156,15 +168,61 @@ def test_load_ratios_preserves_large_finite_values_before_upsert(
                 "gross_margin": 0.04,
                 "free_cash_flow": 12345.67,
             }
-        ],
-        "failed_symbols": [],
-    }
+        ]
+    )
 
-    result = market_data_ratios_weekly.load_ratios.function(payload)
+    result = market_data_ratios_weekly.process_ratio_chunk.function(
+        {
+            "chunk_index": 1,
+            "assets": [
+                {
+                    "symbol": "BMP",
+                    "asset_id": "1816833c-6a63-4441-ab32-8a65660c23da",
+                }
+            ],
+        }
+    )
     row = captured["rows"][0]
 
     assert result["failed_batches"] == []
+    assert result["rows_loaded"] == 1
     assert row[20] == pytest.approx(100000.0)  # interest_coverage is preserved
     assert row[22] == pytest.approx(-12000.0)  # inventory_turnover is preserved
     assert row[18] == pytest.approx(1.5)  # current_ratio remains unchanged
     conn.close.assert_called_once()
+
+
+@pytest.mark.unit
+def test_finalize_ratio_load_returns_alert_after_partial_failures():
+    chunk_results = [
+        {
+            "chunk_index": 1,
+            "chunk_assets": 2,
+            "records_extracted": 4,
+            "rows_prepared": 4,
+            "rows_loaded": 4,
+            "failed_symbols": [],
+            "failed_rows": [],
+            "failed_batches": [],
+            "fatal_error": None,
+        },
+        {
+            "chunk_index": 2,
+            "chunk_assets": 2,
+            "records_extracted": 3,
+            "rows_prepared": 3,
+            "rows_loaded": 2,
+            "failed_symbols": [{"symbol": "BBB", "error": "timeout"}],
+            "failed_rows": [],
+            "failed_batches": [{"batch_index": 1, "size": 1, "error": "db"}],
+            "fatal_error": None,
+        },
+    ]
+
+    result = market_data_ratios_weekly.finalize_ratio_load.function(chunk_results)
+
+    assert result["alert_mode"] is True
+    assert result["failed_symbols"] == 1
+    assert result["failed_rows"] == 0
+    assert result["failed_batches"] == 1
+    assert result["rows_loaded"] == 6

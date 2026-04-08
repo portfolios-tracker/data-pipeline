@@ -286,6 +286,7 @@ def fetch_financial_ratios(symbol, asset_id):
         df = fetch_financial_ratio_frame(symbol, period="Q")
         if df is None or df.empty:
             return pd.DataFrame()
+        df = _coalesce_duplicate_columns(df)
 
         col_candidates = [
             (column, _normalize_metric_label(column)) for column in df.columns.tolist()
@@ -434,7 +435,12 @@ def fetch_financial_ratios(symbol, asset_id):
         return out_df
 
     except Exception as e:
-        logging.error(f"Error ratios {symbol}: {e}")
+        if _is_transient_vci_failure(e):
+            logging.warning(
+                "Transient VCI failure fetching ratios for %s: %s", symbol, e
+            )
+        else:
+            logging.error("Error ratios %s: %s", symbol, e, exc_info=True)
         return pd.DataFrame()
 
 

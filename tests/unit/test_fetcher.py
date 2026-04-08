@@ -323,6 +323,19 @@ class TestFetchFinancialRatios:
         assert result["receivable_turnover"].iloc[0] == pytest.approx(4.0)
         assert result["free_cash_flow"].iloc[0] == pytest.approx(150.0)
 
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    def test_duplicate_ratio_columns_are_coalesced(self, mock_ratio_frame):
+        mock_ratio_frame.return_value = pd.DataFrame(
+            [[2025, 4, 12.5, 13.0, 1.3, 0.18]],
+            columns=["yearReport", "lengthReport", "P/E", "P/E", "P/B", "ROE (%)"],
+        )
+
+        result = fetch_financial_ratios("HPG", "asset-dup")
+
+        assert not result.empty
+        assert result["pe_ratio"].iloc[0] == pytest.approx(12.5)
+        assert result["pb_ratio"].iloc[0] == pytest.approx(1.3)
+
 
 # ============================================================================
 # Placeholder tests for other functions (to be expanded)

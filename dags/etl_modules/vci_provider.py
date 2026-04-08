@@ -71,6 +71,7 @@ def _request_json(
     *,
     payload: dict[str, Any] | None = None,
     timeout: int = 30,
+    operation: str | None = None,
 ) -> Any:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(url, data=body, headers=DEFAULT_HEADERS, method=method)
@@ -84,7 +85,7 @@ def _request_json(
             "vci",
             _execute,
             retry_profile="balanced",
-            operation=f"{method} {url}",
+            operation=operation or f"{method} {url}",
         )
     except HTTPError as exc:
         raise RuntimeError(
@@ -94,11 +95,17 @@ def _request_json(
         raise RuntimeError(f"Failed to reach {url}: {exc}") from exc
 
 
-def _graphql(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+def _graphql(
+    query: str,
+    variables: dict[str, Any] | None = None,
+    *,
+    operation: str | None = None,
+) -> dict[str, Any]:
     response = _request_json(
         "POST",
         GRAPHQL_URL,
         payload={"query": query, "variables": variables or {}},
+        operation=operation,
     )
     if isinstance(response, dict) and response.get("errors"):
         raise RuntimeError(f"VCI GraphQL error: {response['errors']}")
@@ -114,7 +121,11 @@ def _company_type_code(symbol: str) -> str:
     }
     """
     try:
-        data = _graphql(query, {"ticker": symbol})
+        data = _graphql(
+            query,
+            {"ticker": symbol},
+            operation=f"POST {GRAPHQL_URL} CompanyListingInfo ticker={symbol}",
+        )
     except RuntimeError as exc:
         logger.warning(
             "Falling back to company type CT for %s after lookup failure: %s",
@@ -166,7 +177,7 @@ def _financial_ratio_metadata() -> pd.DataFrame:
       }
     }
     """
-    data = _graphql(query)
+    data = _graphql(query, operation=f"POST {GRAPHQL_URL} ListFinancialRatio")
     rows = data.get("ListFinancialRatio") or []
     frame = pd.DataFrame(rows)
     if not frame.empty:
@@ -233,7 +244,13 @@ def _build_financial_frame(
       }}
     }}
     """
-    data = _graphql(query, {"ticker": symbol, "period": period})
+    data = _graphql(
+        query,
+        {"ticker": symbol, "period": period},
+        operation=(
+            f"POST {GRAPHQL_URL} CompanyFinancialRatio ticker={symbol} period={period}"
+        ),
+    )
     ratio_rows = ((data.get("CompanyFinancialRatio") or {}).get("ratio")) or []
     frame = pd.DataFrame(ratio_rows)
     if frame.empty:

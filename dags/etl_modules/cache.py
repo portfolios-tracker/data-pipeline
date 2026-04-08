@@ -208,7 +208,7 @@ def cached_data(ttl_seconds=3600, key_fn=None):
             try:
                 cached_bytes = client.get(key)
                 if cached_bytes is not None:
-                    logging.info(f"Cache HIT for {func.__name__}")
+                    logging.debug(f"Cache HIT for {func.__name__}")
                     cached_value = json.loads(cached_bytes.decode("utf-8"))
                     return _deserialize_value(cached_value)
             except Exception as e:
