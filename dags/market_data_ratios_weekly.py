@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.sdk import task
 from datetime import datetime, timedelta
 from itertools import islice
+import math
 from pendulum import timezone
 import pandas as pd
 import psycopg2
@@ -26,6 +27,33 @@ except ModuleNotFoundError as exc:
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
+NUMERIC_SANITIZE_COLUMNS = (
+    "pe_ratio",
+    "pb_ratio",
+    "ps_ratio",
+    "p_cashflow_ratio",
+    "eps",
+    "bvps",
+    "market_cap",
+    "roe",
+    "roa",
+    "roic",
+    "financial_leverage",
+    "dividend_yield",
+    "net_profit_margin",
+    "debt_to_equity",
+    "current_ratio",
+    "quick_ratio",
+    "interest_coverage",
+    "asset_turnover",
+    "inventory_turnover",
+    "receivable_turnover",
+    "revenue_growth",
+    "profit_growth",
+    "operating_margin",
+    "gross_margin",
+    "free_cash_flow",
+)
 
 default_args = {
     "owner": "data_engineer",
@@ -82,6 +110,23 @@ def _report_failed_symbols(stage, failed_symbols):
     print(f"{stage}: failed symbols ({len(failed_symbols)}):")
     for item in failed_symbols:
         print(f"- {item['symbol']}: {item['error']}")
+
+
+def _sanitize_numeric_value(value):
+    if value in (None, "", "NaT", "nan"):
+        return None, False
+    try:
+        if pd.isna(value):
+            return None, False
+    except TypeError:
+        pass
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return value, False
+    if not math.isfinite(numeric_value):
+        return None, True
+    return numeric_value, False
 
 
 def _upsert_rows_in_batches(conn, query, rows, *, table_name):
@@ -206,11 +251,19 @@ with DAG(
 
         rows = []
         failed_rows = []
+        non_finite_count = 0
         for row in records:
             asset_id = row.get("asset_id")
             try:
                 row_values = dict(row)
                 row_values["fiscal_date"] = _parse_date_value(row.get("fiscal_date"))
+                for column in NUMERIC_SANITIZE_COLUMNS:
+                    sanitized_value, did_sanitize = _sanitize_numeric_value(
+                        row_values.get(column)
+                    )
+                    row_values[column] = sanitized_value
+                    if did_sanitize:
+                        non_finite_count += 1
                 rows.append(tuple(row_values.get(col, 0) for col in ratio_cols))
             except Exception as exc:
                 failed_rows.append(
@@ -219,6 +272,12 @@ with DAG(
                         "error": f"ratio row conversion failed: {exc}",
                     }
                 )
+
+        if non_finite_count:
+            print(
+                "load_ratios: sanitized non-finite numeric values "
+                f"(count={non_finite_count})"
+            )
 
         print(f"Upserting {len(rows)} financial ratio rows into market_data.financial_ratios...")
         try:
