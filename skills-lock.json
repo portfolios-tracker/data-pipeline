@@ -41,6 +41,11 @@
       "sourceType": "github",
       "computedHash": "85d67e5a633eb8fa7f34db9afa7e45ffbc254a4af19171572e7f319e6099a40e"
     },
+    "reverse-engineering-api": {
+      "source": "kalil0321/reverse-api-engineer",
+      "sourceType": "github",
+      "computedHash": "fe88d46eb968965bd3dfc8e4742c7698b27aae2e6fed3c68f80e3c9d80c9662b"
+    },
     "sql-code-review": {
       "source": "github/awesome-copilot",
       "sourceType": "github",

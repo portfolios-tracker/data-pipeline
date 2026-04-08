@@ -1,5 +1,6 @@
 import logging
 import os
+import unicodedata
 from urllib.parse import urlparse
 
 import numpy as np
@@ -9,10 +10,7 @@ try:
     from etl_modules.vci_provider import (
         fetch_balance_sheet as fetch_balance_sheet_frame,
     )
-    from etl_modules.vci_provider import (
-        fetch_company_events,
-        fetch_company_news,
-    )
+    from etl_modules.vci_provider import fetch_company_news
     from etl_modules.vci_provider import (
         fetch_financial_ratios as fetch_financial_ratio_frame,
     )
@@ -24,6 +22,15 @@ try:
     )
     from etl_modules.vci_provider import (
         list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
+    )
+    from etl_modules.vietstock_corp_actions import (
+        default_date_window as default_corp_action_date_window,
+    )
+    from etl_modules.vietstock_corp_actions import (
+        fetch_vietstock_corporate_events as fetch_vietstock_corporate_events_frame,
+    )
+    from etl_modules.vietstock_corp_actions import (
+        fetch_vietstock_dividends as fetch_vietstock_dividends_frame,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
@@ -31,10 +38,7 @@ except ModuleNotFoundError as exc:
     from dags.etl_modules.vci_provider import (
         fetch_balance_sheet as fetch_balance_sheet_frame,
     )
-    from dags.etl_modules.vci_provider import (
-        fetch_company_events,
-        fetch_company_news,
-    )
+    from dags.etl_modules.vci_provider import fetch_company_news
     from dags.etl_modules.vci_provider import (
         fetch_financial_ratios as fetch_financial_ratio_frame,
     )
@@ -46,6 +50,15 @@ except ModuleNotFoundError as exc:
     )
     from dags.etl_modules.vci_provider import (
         list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
+    )
+    from dags.etl_modules.vietstock_corp_actions import (
+        default_date_window as default_corp_action_date_window,
+    )
+    from dags.etl_modules.vietstock_corp_actions import (
+        fetch_vietstock_corporate_events as fetch_vietstock_corporate_events_frame,
+    )
+    from dags.etl_modules.vietstock_corp_actions import (
+        fetch_vietstock_dividends as fetch_vietstock_dividends_frame,
     )
 
 try:
@@ -55,12 +68,22 @@ except ModuleNotFoundError as exc:
         raise
     from dags.etl_modules.cache import cached_data
 
-Company = None
-
 # ---------------------------------------------------------------------------
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
 # ---------------------------------------------------------------------------
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
+_VCI_TRANSIENT_ERROR_MARKERS = (
+    "failed to reach https://trading.vietcap.com.vn",
+    "read timed out",
+    "timed out",
+    "sslv3_alert_certificate_unknown",
+    "certificate unknown",
+    "http 429 from https://trading.vietcap.com.vn",
+    "http 500 from https://trading.vietcap.com.vn",
+    "http 502 from https://trading.vietcap.com.vn",
+    "http 503 from https://trading.vietcap.com.vn",
+    "http 504 from https://trading.vietcap.com.vn",
+)
 
 
 def _extract_source_host(url: object) -> str | None:
@@ -68,6 +91,15 @@ def _extract_source_host(url: object) -> str | None:
         return None
     host = urlparse(url.strip()).netloc
     return host or None
+
+
+def _is_transient_vci_failure(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return any(marker in message for marker in _VCI_TRANSIENT_ERROR_MARKERS)
 
 
 # Temporary guardrail intentionally disabled.
@@ -141,6 +173,52 @@ def clean_decimal_cols(df, cols):
             # 3. Fill NaN with 0 and infer objects to avoid downcasting warning
             df[col] = df[col].fillna(0).infer_objects(copy=False)
     return df
+
+
+def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not df.columns.has_duplicates:
+        return df
+
+    coalesced_series = []
+    for column_name in dict.fromkeys(df.columns):
+        duplicated = df.loc[:, df.columns == column_name]
+        if isinstance(duplicated, pd.Series):
+            coalesced_series.append(duplicated.rename(column_name))
+            continue
+        duplicated_values = duplicated.to_numpy(dtype=object)
+        merged_values = []
+        for row_values in duplicated_values:
+            selected = np.nan
+            for value in row_values:
+                if pd.notna(value):
+                    selected = value
+                    break
+            merged_values.append(selected)
+        merged = pd.Series(merged_values, index=duplicated.index, name=column_name)
+        coalesced_series.append(merged)
+    return pd.concat(coalesced_series, axis=1)
+
+
+def _normalize_metric_label(label: object) -> str:
+    value = str(label or "").strip()
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKD", value)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.replace("đ", "d").replace("Đ", "D")
+    normalized = normalized.lower()
+    normalized = normalized.replace("&", " and ")
+    cleaned = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in normalized)
+    return " ".join(cleaned.split())
+
+
+def _statement_cache_key(kind: str, symbol: str, asset_id: str) -> dict[str, str]:
+    return {
+        "kind": kind,
+        "symbol": str(symbol),
+        "asset_id": str(asset_id),
+        "version": "2026-04-08",
+    }
 
 
 @cached_data(ttl_seconds=43200)  # 12 hours
@@ -263,7 +341,10 @@ def fetch_financial_ratios(symbol, asset_id):
         return pd.DataFrame()
 
 
-@cached_data(ttl_seconds=86400)  # 24 hours
+@cached_data(
+    ttl_seconds=86400,
+    key_fn=lambda symbol, asset_id: _statement_cache_key("income_stmt", symbol, asset_id),
+)  # 24 hours
 def fetch_income_stmt(symbol, asset_id):
     """
     Fetches income statement.
@@ -296,6 +377,7 @@ def fetch_income_stmt(symbol, asset_id):
         # Safe rename: only rename columns that exist
         rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
         df.rename(columns=rename_dict, inplace=True)
+        df = _coalesce_duplicate_columns(df)
 
         # The required metrics are the unique values in the mapping dict
         required_metrics = list(set(mapping.values()))
@@ -349,11 +431,17 @@ def fetch_income_stmt(symbol, asset_id):
         return df_final[final_cols]
 
     except Exception as e:
-        logging.error(f"Error fetching income stmt for {symbol}: {e}", exc_info=True)
+        if _is_transient_vci_failure(e):
+            logging.warning("Transient VCI failure fetching income stmt for %s: %s", symbol, e)
+        else:
+            logging.error(f"Error fetching income stmt for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
 
 
-@cached_data(ttl_seconds=86400)  # 24 hours
+@cached_data(
+    ttl_seconds=86400,
+    key_fn=lambda symbol, asset_id: _statement_cache_key("balance_sheet", symbol, asset_id),
+)  # 24 hours
 def fetch_balance_sheet(symbol, asset_id):
     try:
         df = fetch_balance_sheet_frame(symbol, period="Q")
@@ -361,28 +449,51 @@ def fetch_balance_sheet(symbol, asset_id):
         if df is None or df.empty:
             return pd.DataFrame()
 
-        mapping = {
-            "Total Asset": "total_assets",
-            "Total Assets": "total_assets",
-            "Total Liabilities": "total_liabilities",
-            "Owner's Equity": "total_equity",
-            "Total Equity": "total_equity",
-            "Cash & Equivalents": "cash_and_equivalents",
-            "Cash and Cash Equivalents": "cash_and_equivalents",
-            "Short-term Asset": "short_term_assets",
-            "Short Term Assets": "short_term_assets",
-            "Long-term Asset": "long_term_assets",
-            "Long Term Assets": "long_term_assets",
-            "Short-term Liability": "short_term_liabilities",
-            "Short Term Liabilities": "short_term_liabilities",
-            "Long-term Liability": "long_term_liabilities",
-            "Long Term Liabilities": "long_term_liabilities",
+        metric_aliases = {
+            "total_assets": ["Total Asset", "Total Assets", "Tổng tài sản"],
+            "total_liabilities": ["Total Liabilities", "Tổng nợ phải trả", "Nợ phải trả"],
+            "total_equity": ["Owner's Equity", "Total Equity", "Vốn chủ sở hữu"],
+            "cash_and_equivalents": [
+                "Cash & Equivalents",
+                "Cash and Cash Equivalents",
+                "Tiền và tương đương tiền",
+            ],
+            "short_term_assets": [
+                "Short-term Asset",
+                "Short Term Assets",
+                "Tài sản ngắn hạn",
+            ],
+            "long_term_assets": [
+                "Long-term Asset",
+                "Long Term Assets",
+                "Tài sản dài hạn",
+            ],
+            "short_term_liabilities": [
+                "Short-term Liability",
+                "Short Term Liabilities",
+                "Nợ ngắn hạn",
+            ],
+            "long_term_liabilities": [
+                "Long-term Liability",
+                "Long Term Liabilities",
+                "Nợ dài hạn",
+            ],
+        }
+        normalized_alias_map = {
+            _normalize_metric_label(alias): target
+            for target, aliases in metric_aliases.items()
+            for alias in aliases
         }
 
-        rename_dict = {col: mapping[col] for col in mapping if col in df.columns}
+        rename_dict = {
+            column: normalized_alias_map[_normalize_metric_label(column)]
+            for column in df.columns
+            if _normalize_metric_label(column) in normalized_alias_map
+        }
         df.rename(columns=rename_dict, inplace=True)
+        df = _coalesce_duplicate_columns(df)
 
-        required_metrics = list(set(mapping.values()))
+        required_metrics = list(set(normalized_alias_map.values()))
         df_final = df.copy()
 
         if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
@@ -419,49 +530,47 @@ def fetch_balance_sheet(symbol, asset_id):
         final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
         return df_final[final_cols]
     except Exception as e:
-        logging.error(f"Error fetching balance sheet for {symbol}: {e}", exc_info=True)
+        if _is_transient_vci_failure(e):
+            logging.warning(
+                "Transient VCI failure fetching balance sheet for %s: %s", symbol, e
+            )
+        else:
+            logging.error(f"Error fetching balance sheet for {symbol}: {e}", exc_info=True)
         return pd.DataFrame()
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
 def fetch_corporate_events(symbol, asset_id):
-    try:
-        df = fetch_company_events(symbol)
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        df_final = df.copy()
-        df_final["asset_id"] = asset_id
-
-        required_cols = [
-            "asset_id",
-            "event_id",
-            "event_date",
-            "public_date",
-            "exright_date",
-            "event_title",
-            "event_type",
-            "event_description",
-        ]
-
-        for col in required_cols:
-            if col not in df_final.columns:
-                df_final[col] = None
-
-        if "event_id" in df_final.columns:
-            df_final["event_id"] = df_final["event_id"].astype(str)
-
-        for dcol in ["event_date", "public_date", "exright_date"]:
-            if dcol in df_final.columns:
-                df_final[dcol] = pd.to_datetime(df_final[dcol], errors="coerce").dt.date
-
-        return df_final[required_cols]
-    except Exception as e:
-        if "404" in str(e) or "Not Found" in str(e):
-            logging.warning(f"Events data not available for {symbol}")
-        else:
-            logging.error(f"Error fetching events for {symbol}: {e}", exc_info=True)
+    from_date, to_date = default_corp_action_date_window()
+    df = fetch_vietstock_corporate_events_frame(
+        symbol,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    if df is None or df.empty:
         return pd.DataFrame()
+
+    df_final = df.copy()
+    df_final["asset_id"] = asset_id
+
+    required_cols = [
+        "asset_id",
+        "event_id",
+        "event_date",
+        "public_date",
+        "exright_date",
+        "event_title",
+        "event_type",
+        "event_description",
+    ]
+    for col in required_cols:
+        if col not in df_final.columns:
+            df_final[col] = None
+
+    df_final["event_id"] = df_final["event_id"].astype(str)
+    for dcol in ["event_date", "public_date", "exright_date"]:
+        df_final[dcol] = pd.to_datetime(df_final[dcol], errors="coerce").dt.date
+    return df_final[required_cols]
 
 
 @cached_data(ttl_seconds=43200)  # 12 hours
@@ -546,60 +655,35 @@ def fetch_index_history(
 @cached_data(ttl_seconds=3600)  # 1 hour
 def fetch_dividends(symbol, asset_id):
     """Fetch dividend history and normalize to a stable schema."""
-    try:
-        global Company
-        if Company is None:
-            from vnstock import Company as VnstockCompany
-
-            Company = VnstockCompany
-
-        company = Company(symbol=symbol, source="VCI")
-        df = company.dividends()
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        df = df.copy()
-        df["ticker"] = symbol
-        df["asset_id"] = asset_id
-
-        # Normalize commonly seen provider column variants.
-        rename_map = {
-            "exerciseDate": "exercise_date",
-            "exerDate": "exercise_date",
-            "cashYear": "cash_year",
-            "cashRate": "cash_dividend_percentage",
-            "stockRate": "stock_dividend_percentage",
-            "issueMethod": "issue_method",
-        }
-        for old_col, new_col in rename_map.items():
-            if old_col in df.columns and new_col not in df.columns:
-                df.rename(columns={old_col: new_col}, inplace=True)
-
-        required_cols = [
-            "ticker",
-            "exercise_date",
-            "cash_year",
-            "cash_dividend_percentage",
-            "stock_dividend_percentage",
-            "issue_method",
-        ]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = None
-
-        df["exercise_date"] = pd.to_datetime(
-            df["exercise_date"], errors="coerce"
-        ).dt.date
-        df["cash_year"] = pd.to_numeric(df["cash_year"], errors="coerce").fillna(0)
-        df["cash_year"] = df["cash_year"].astype(int)
-        df = clean_decimal_cols(
-            df, ["cash_dividend_percentage", "stock_dividend_percentage"]
-        )
-
-        return df[required_cols]
-    except Exception as e:
-        logging.error(f"Error fetching dividends for {symbol}: {e}", exc_info=True)
+    from_date, to_date = default_corp_action_date_window()
+    df = fetch_vietstock_dividends_frame(
+        symbol,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    if df is None or df.empty:
         return pd.DataFrame()
+
+    df = df.copy()
+    df["ticker"] = symbol
+    df["asset_id"] = asset_id
+
+    required_cols = [
+        "ticker",
+        "exercise_date",
+        "cash_year",
+        "cash_dividend_percentage",
+        "stock_dividend_percentage",
+        "issue_method",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = None
+
+    df["exercise_date"] = pd.to_datetime(df["exercise_date"], errors="coerce").dt.date
+    df["cash_year"] = pd.to_numeric(df["cash_year"], errors="coerce").fillna(0).astype(int)
+    df = clean_decimal_cols(df, ["cash_dividend_percentage", "stock_dividend_percentage"])
+    return df[required_cols]
 
 
 @cached_data(ttl_seconds=3600)  # 1 hour

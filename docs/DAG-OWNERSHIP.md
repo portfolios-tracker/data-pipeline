@@ -3,7 +3,10 @@
 | DAG                         | Schedule               | Primary Domain          | Owner            |
 | --------------------------- | ---------------------- | ----------------------- | ---------------- |
 | assets_dimension_etl        | Weekly (Sun 2 AM ICT)  | Asset dimensions        | Data Engineering |
-| market_data_evening_batch   | Weekdays (6 PM ICT)    | EOD market ingestion    | Data Engineering |
+| market_data_prices_daily    | Weekdays (6 PM ICT)    | EOD prices ingestion    | Data Engineering |
+| market_data_events_daily    | Weekdays (6:20 PM ICT) | Corporate events ingestion | Data Engineering |
+| market_data_ratios_weekly   | Weekly (Sun 7 PM ICT)  | Financial ratios ingestion | Data Engineering |
+| market_data_fundamentals_weekly | Weekly (Sun 7 PM ICT) | Fundamentals ingestion | Data Engineering |
 | refresh_historical_prices   | Daily (6:30 PM ICT)    | Historical price refresh| Data Engineering |
 | market_news_morning         | Weekdays (7 AM ICT)    | News + summarization    | Data Engineering |
 | portfolio_schedule_snapshot | Hourly                 | API-triggered snapshots | Platform/Data    |

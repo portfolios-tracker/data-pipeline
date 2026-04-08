@@ -1,8 +1,8 @@
 """Direct VCI data access helpers used by the data-pipeline DAGs.
 
-This module replaces the vnstock runtime dependency for the evening batch
-by calling the Vietcap endpoints directly and shaping the payloads into the
-same tabular contracts the loaders already expect.
+This module replaces the vnstock runtime dependency for the split EOD market
+data DAGs by calling the Vietcap endpoints directly and shaping the payloads
+into the same tabular contracts the loaders already expect.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -19,6 +20,13 @@ from urllib.request import Request, urlopen
 import pandas as pd
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+try:
+    from etl_modules.request_governor import governed_call
+except ModuleNotFoundError as exc:
+    if exc.name != "etl_modules":
+        raise
+    from dags.etl_modules.request_governor import governed_call
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +47,7 @@ DEFAULT_HEADERS = {
 }
 
 _FALLBACK_VN_TICKERS = ["HPG", "VCB", "VNM", "FPT", "MWG", "VIC"]
+_DOTNET_DATE_PATTERN = re.compile(r"/Date\((\d+)(?:[+-]\d+)?\)/")
 
 
 def _camel_to_snake(name: str) -> str:
@@ -56,9 +65,18 @@ def _request_json(
 ) -> Any:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(url, data=body, headers=DEFAULT_HEADERS, method=method)
-    try:
+
+    def _execute() -> Any:
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    try:
+        return governed_call(
+            "vci",
+            _execute,
+            retry_profile="balanced",
+            operation=f"{method} {url}",
+        )
     except HTTPError as exc:
         raise RuntimeError(
             f"HTTP {exc.code} from {url}: {exc.read().decode('utf-8', 'ignore')}"
@@ -86,7 +104,15 @@ def _company_type_code(symbol: str) -> str:
       }
     }
     """
-    data = _graphql(query, {"ticker": symbol})
+    try:
+        data = _graphql(query, {"ticker": symbol})
+    except RuntimeError as exc:
+        logger.warning(
+            "Falling back to company type CT for %s after lookup failure: %s",
+            symbol,
+            exc,
+        )
+        return "CT"
     listing_info = data.get("CompanyListingInfo") or {}
     icb_name = str(listing_info.get("icbName4") or "").strip().lower()
 
@@ -99,7 +125,8 @@ def _company_type_code(symbol: str) -> str:
     return "CT"
 
 
-def _financial_ratio_metadata() -> pd.DataFrame:
+@lru_cache(maxsize=1)
+def _financial_ratio_metadata_cached() -> pd.DataFrame:
     query = """
     query Query {
       ListFinancialRatio {
@@ -124,6 +151,11 @@ def _financial_ratio_metadata() -> pd.DataFrame:
         return frame
     frame.columns = [_camel_to_snake(column) for column in frame.columns]
     return frame
+
+
+def _financial_ratio_metadata() -> pd.DataFrame:
+    frame = _financial_ratio_metadata_cached()
+    return frame.copy(deep=True)
 
 
 def _build_financial_frame(
@@ -226,6 +258,50 @@ def _extract_source_host(url: object) -> str | None:
         return None
     host = urlparse(url.strip()).netloc
     return host or None
+
+
+def _parse_date_value(value: Any, *, numeric_unit: str = "ms") -> date | None:
+    if value in (None, "", "null", "NaT", "nan"):
+        return None
+
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        ts = int(value)
+        if numeric_unit == "ms":
+            return datetime.fromtimestamp(ts / 1000, tz=UTC).date()
+        return datetime.fromtimestamp(ts, tz=UTC).date()
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    dotnet_match = _DOTNET_DATE_PATTERN.search(text)
+    if dotnet_match:
+        ts_ms = int(dotnet_match.group(1))
+        return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).date()
+
+    if text.isdigit():
+        ts = int(text)
+        if numeric_unit == "ms":
+            return datetime.fromtimestamp(ts / 1000, tz=UTC).date()
+        return datetime.fromtimestamp(ts, tz=UTC).date()
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _parse_date_series(values: Iterable[Any], *, numeric_unit: str = "ms") -> pd.Series:
+    return pd.Series(
+        [_parse_date_value(value, numeric_unit=numeric_unit) for value in values],
+        index=getattr(values, "index", None),
+    )
 
 
 def list_active_vn_stock_tickers(
@@ -343,15 +419,9 @@ def fetch_stock_price(symbol: str, start_date: str, end_date: str) -> pd.DataFra
     required_cols = ["trading_date", "open", "high", "low", "close", "volume"]
     frame = frame[[column for column in required_cols if column in frame.columns]]
     if "trading_date" in frame.columns:
-        if pd.api.types.is_numeric_dtype(frame["trading_date"]):
-            frame["trading_date"] = pd.to_datetime(
-                frame["trading_date"], unit="s", errors="coerce"
-            )
-        else:
-            frame["trading_date"] = pd.to_datetime(
-                frame["trading_date"], errors="coerce"
-            )
-        frame["trading_date"] = frame["trading_date"].dt.date
+        frame["trading_date"] = _parse_date_series(
+            frame["trading_date"], numeric_unit="s"
+        )
 
     frame["ticker"] = symbol
     frame["source"] = "vci"
@@ -434,20 +504,32 @@ def fetch_company_events(symbol: str) -> pd.DataFrame:
 
     for column in ["event_date", "public_date", "exright_date"]:
         if column in frame.columns:
-            frame[column] = pd.to_datetime(frame[column], errors="coerce").dt.date
+            frame[column] = _parse_date_series(frame[column], numeric_unit="ms")
 
     if "event_id" in frame.columns:
         frame["event_id"] = frame["event_id"].astype(str)
     else:
         frame["event_id"] = None
     if "event_description_en" in frame.columns:
+        fallback_description = (
+            frame["event_description"]
+            if "event_description" in frame.columns
+            else pd.Series([None] * len(frame), index=frame.index)
+        )
         frame["event_description"] = frame["event_description_en"].fillna(
-            frame.get("event_description")
+            fallback_description
         )
     if "event_type" in frame.columns:
-        frame["event_type"] = frame["event_type"].fillna(frame.get("organCode"))
+        fallback_event_type = (
+            frame["organCode"]
+            if "organCode" in frame.columns
+            else pd.Series([None] * len(frame), index=frame.index)
+        )
+        frame["event_type"] = frame["event_type"].fillna(fallback_event_type)
     else:
-        frame["event_type"] = frame.get("organCode")
+        frame["event_type"] = (
+            frame["organCode"] if "organCode" in frame.columns else None
+        )
     required_cols = [
         "event_id",
         "event_date",
@@ -510,7 +592,7 @@ def fetch_company_news(symbol: str) -> pd.DataFrame:
         frame["price_change"] = pd.to_numeric(
             frame["price_at_publish"], errors="coerce"
         ) - pd.to_numeric(frame["reference_price"], errors="coerce")
-    frame["publish_date"] = pd.to_datetime(frame["publish_date"], errors="coerce")
+    frame["publish_date"] = _parse_date_series(frame["publish_date"], numeric_unit="ms")
     if "price_change_ratio" in frame.columns:
         frame["price_change_ratio"] = pd.to_numeric(
             frame["price_change_ratio"], errors="coerce"
@@ -556,7 +638,15 @@ def fetch_company_overview(symbol: str) -> pd.DataFrame:
       }
     }
     """
-    data = _graphql(query, {"ticker": symbol})
+    try:
+        data = _graphql(query, {"ticker": symbol})
+    except RuntimeError as exc:
+        logger.warning(
+            "Falling back to default company type CT for %s after lookup failure: %s",
+            symbol,
+            exc,
+        )
+        return "CT"
     listing_info = data.get("CompanyListingInfo") or {}
     if not listing_info:
         return pd.DataFrame()

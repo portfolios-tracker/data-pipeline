@@ -11,13 +11,15 @@ Tests cover:
 """
 
 from datetime import date, datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 from dags.etl_modules.fetcher import (
     clean_decimal_cols,
+    fetch_balance_sheet,
+    fetch_corporate_events,
     fetch_dividends,
     fetch_financial_ratios,
     fetch_income_stmt,
@@ -388,25 +390,150 @@ class TestFetchIncomeStmt:
         result = fetch_income_stmt("HPG", "dummy_asset_id")
         assert result.empty
 
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_coalesces_duplicate_mapped_columns(self, mock_income_frame):
+        mock_income_frame.return_value = pd.DataFrame(
+            {
+                "Net Sales": [1000],
+                "Selling Expense": [None],
+                "Selling Expenses": [125],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
+
+        assert not result.empty
+        assert result["selling_expenses"].iloc[0] == 125.0
+
+    @patch("dags.etl_modules.fetcher.logging.error")
+    @patch("dags.etl_modules.fetcher.logging.warning")
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_transient_vci_failures_log_warning(
+        self,
+        mock_income_frame,
+        mock_warning,
+        mock_error,
+    ):
+        mock_income_frame.side_effect = RuntimeError(
+            "Failed to reach https://trading.vietcap.com.vn/data-mt/graphql: "
+            "<urlopen error [SSL: SSLV3_ALERT_CERTIFICATE_UNKNOWN] certificate unknown>"
+        )
+
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
+
+        assert result.empty
+        assert any(
+            "Transient VCI failure fetching income stmt" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+        mock_error.assert_not_called()
+
+
+@pytest.mark.unit
+class TestFetchBalanceSheet:
+    """Unit tests for fetch_balance_sheet function."""
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    def test_balance_sheet_maps_vietnamese_labels(
+        self, mock_balance_sheet_frame, _mock_get_redis_client
+    ):
+        mock_balance_sheet_frame.return_value = pd.DataFrame(
+            {
+                "Tổng tài sản": [1_000_000],
+                "Tổng nợ phải trả": [400_000],
+                "Vốn chủ sở hữu": [600_000],
+                "Tiền và tương đương tiền": [120_000],
+                "Tài sản ngắn hạn": [300_000],
+                "Tài sản dài hạn": [700_000],
+                "Nợ ngắn hạn": [200_000],
+                "Nợ dài hạn": [200_000],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_balance_sheet("VNM", "asset-vnm")
+
+        assert len(result) == 1
+        assert result["fiscal_date"].iloc[0] == "2024-12-31"
+        assert result["total_assets"].iloc[0] == 1_000_000
+        assert result["total_liabilities"].iloc[0] == 400_000
+        assert result["total_equity"].iloc[0] == 600_000
+        assert result["cash_and_equivalents"].iloc[0] == 120_000
+        assert result["short_term_assets"].iloc[0] == 300_000
+        assert result["long_term_assets"].iloc[0] == 700_000
+        assert result["short_term_liabilities"].iloc[0] == 200_000
+        assert result["long_term_liabilities"].iloc[0] == 200_000
+
+    @patch("dags.etl_modules.fetcher.logging.error")
+    @patch("dags.etl_modules.fetcher.logging.warning")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    def test_balance_sheet_transient_vci_failures_log_warning(
+        self,
+        mock_balance_sheet_frame,
+        mock_warning,
+        mock_error,
+    ):
+        mock_balance_sheet_frame.side_effect = RuntimeError(
+            "HTTP 502 from https://trading.vietcap.com.vn/data-mt/graphql: bad gateway"
+        )
+
+        result = fetch_balance_sheet("HPG", "asset-hpg")
+
+        assert result.empty
+        assert any(
+            "Transient VCI failure fetching balance sheet" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+        mock_error.assert_not_called()
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    def test_balance_sheet_maps_case_insensitive_labels(
+        self, mock_balance_sheet_frame, _mock_get_redis_client
+    ):
+        mock_balance_sheet_frame.return_value = pd.DataFrame(
+            {
+                "total assets": [2_000_000],
+                "total liabilities": [800_000],
+                "owner's equity": [1_200_000],
+                "cash and cash equivalents": [200_000],
+                "short term assets": [900_000],
+                "long term assets": [1_100_000],
+                "short term liabilities": [400_000],
+                "long term liabilities": [400_000],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_balance_sheet("AAA", "asset-aaa")
+
+        assert len(result) == 1
+        assert result["total_assets"].iloc[0] == 2_000_000
+        assert result["total_liabilities"].iloc[0] == 800_000
+        assert result["total_equity"].iloc[0] == 1_200_000
+        assert result["cash_and_equivalents"].iloc[0] == 200_000
+
 
 @pytest.mark.unit
 class TestFetchDividends:
     """Unit tests for fetch_dividends function."""
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_dividends_success(self, mock_company_class):
-        mock_company = Mock()
-        df = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_dividends_frame")
+    def test_dividends_success(self, mock_dividends_frame):
+        mock_dividends_frame.return_value = pd.DataFrame(
             {
-                "exercise_date": ["2024-06-15"],
+                "exercise_date": [date(2024, 6, 15)],
                 "cash_year": [2024],
                 "cash_dividend_percentage": [15.0],
                 "stock_dividend_percentage": [0.0],
-                "issue_method": ["cash"],
+                "issue_method": ["Cash dividend"],
             }
         )
-        mock_company.dividends.return_value = df
-        mock_company_class.return_value = mock_company
 
         result = fetch_dividends("HPG", "dummy_asset_id")
 
@@ -424,16 +551,9 @@ class TestFetchDividends:
         assert result["ticker"].iloc[0] == "HPG"
         assert str(result["exercise_date"].iloc[0]) == "2024-06-15"
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_dividends_missing_fields_filled(self, mock_company_class):
-        mock_company = Mock()
-        df = pd.DataFrame(
-            {
-                "exercise_date": ["2024-06-15"],
-            }
-        )
-        mock_company.dividends.return_value = df
-        mock_company_class.return_value = mock_company
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_dividends_frame")
+    def test_dividends_missing_fields_filled(self, mock_dividends_frame):
+        mock_dividends_frame.return_value = pd.DataFrame({"exercise_date": ["2024-06-15"]})
 
         result = fetch_dividends("HPG", "dummy_asset_id")
         assert not result.empty
@@ -441,13 +561,43 @@ class TestFetchDividends:
         assert result["cash_dividend_percentage"].iloc[0] == 0.0
         assert result["issue_method"].iloc[0] is None
 
-    @patch("dags.etl_modules.fetcher.Company")
-    def test_dividends_empty_dataframe(self, mock_company_class):
-        mock_company = Mock()
-        mock_company.dividends.return_value = pd.DataFrame()
-        mock_company_class.return_value = mock_company
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_dividends_frame")
+    def test_dividends_empty_dataframe(self, mock_dividends_frame):
+        mock_dividends_frame.return_value = pd.DataFrame()
 
         result = fetch_dividends("HPG", "dummy_asset_id")
+        assert result.empty
+
+
+@pytest.mark.unit
+class TestFetchCorporateEvents:
+    """Unit tests for fetch_corporate_events function."""
+
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_corporate_events_frame")
+    def test_corporate_events_success(self, mock_events_frame):
+        mock_events_frame.return_value = pd.DataFrame(
+            {
+                "event_id": [12345],
+                "event_date": [date(2026, 5, 7)],
+                "public_date": [date(2026, 4, 6)],
+                "exright_date": [date(2026, 4, 5)],
+                "event_title": ["VCI dividend notice"],
+                "event_type": ["Cash dividend"],
+                "event_description": ["Cash payout 5%"],
+            }
+        )
+
+        result = fetch_corporate_events("VCI", "asset-vci")
+
+        assert len(result) == 1
+        assert result["asset_id"].iloc[0] == "asset-vci"
+        assert result["event_id"].iloc[0] == "12345"
+        assert str(result["exright_date"].iloc[0]) == "2026-04-05"
+
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_corporate_events_frame")
+    def test_corporate_events_empty(self, mock_events_frame):
+        mock_events_frame.return_value = pd.DataFrame()
+        result = fetch_corporate_events("VCI", "asset-vci")
         assert result.empty
 
 

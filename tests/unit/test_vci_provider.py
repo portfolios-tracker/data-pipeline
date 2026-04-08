@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -122,3 +122,58 @@ class TestIndustryMetadataNormalization:
 
         assert "icb_code" in df.columns
         assert df.loc[0, "icb_code"] == "55101010"
+
+
+@pytest.mark.unit
+class TestRequestGovernanceAndDateParsing:
+    @patch("dags.etl_modules.vci_provider.urlopen")
+    @patch("dags.etl_modules.vci_provider.governed_call")
+    def test_request_json_routes_calls_through_governor(
+        self, mock_governed_call, mock_urlopen
+    ):
+        response = MagicMock()
+        response.read.return_value = b'{"ok": true}'
+        mock_urlopen.return_value.__enter__.return_value = response
+        mock_governed_call.side_effect = (
+            lambda source, request_fn, **kwargs: request_fn()
+        )
+
+        payload = vci_provider._request_json("GET", "https://example.com/test")
+
+        assert payload == {"ok": True}
+        assert mock_governed_call.call_count == 1
+        assert mock_governed_call.call_args.args[0] == "vci"
+
+    @patch("dags.etl_modules.vci_provider._graphql")
+    def test_fetch_company_events_parses_mixed_date_formats(self, mock_graphql):
+        mock_graphql.return_value = {
+            "OrganizationEvents": [
+                {
+                    "id": 10,
+                    "eventTitle": "Dividend update",
+                    "publicDate": "05/04/2026",
+                    "issueDate": "/Date(1778173200000)/",
+                    "exrightDate": 1775494800000,
+                    "eventListCode": "CASH",
+                    "eventListName": "Cash dividend",
+                }
+            ]
+        }
+
+        df = vci_provider.fetch_company_events("VCI")
+
+        assert len(df) == 1
+        assert str(df.loc[0, "public_date"]) == "2026-04-05"
+        assert str(df.loc[0, "event_date"]) == "2026-05-07"
+        assert str(df.loc[0, "exright_date"]) == "2026-04-06"
+
+
+@pytest.mark.unit
+class TestCompanyTypeFallback:
+    @patch("dags.etl_modules.vci_provider._graphql")
+    def test_company_type_defaults_to_ct_when_lookup_fails(self, mock_graphql):
+        mock_graphql.side_effect = RuntimeError("upstream timeout")
+
+        result = vci_provider._company_type_code("DPR")
+
+        assert result == "CT"

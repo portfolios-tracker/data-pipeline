@@ -46,7 +46,10 @@ graph LR
 | DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                    |
 | :---------------------------- | :----------------- | :----------------------------------------- | :----------------------------------------------------------------------------- |
 | `assets_dimension_etl`        | Weekly (Sun 2 AM)  | Epic 9.1 – Asset Dimensions                | Syncs asset master data (VN/US Stocks, Crypto, Precious Metals) into Supabase. |
-| `market_data_evening_batch`   | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data                   | Fetches end-of-day prices, financial ratios, income statements, balance sheets, and corporate events. |
+| `market_data_prices_daily`    | Mon-Fri (6 PM ICT) | Epic 7 – EOD Market Data (Prices)          | Fetches and upserts end-of-day market prices.                                    |
+| `market_data_events_daily`    | Mon-Fri (6:20 PM ICT) | Epic 7 – EOD Market Data (Events)      | Fetches and upserts daily corporate actions/events.                              |
+| `market_data_ratios_weekly`   | Weekly (Sun 7 PM ICT) | Epic 7 – EOD Market Data (Ratios)      | Fetches and upserts financial ratios in weekly batches.                          |
+| `market_data_fundamentals_weekly` | Weekly (Sun 7 PM ICT) | Epic 7 – EOD Market Data (Fundamentals) | Fetches and upserts income statements and balance sheets.                        |
 | `refresh_historical_prices`   | Daily (6:30 PM ICT)| Epic 7 – Historical Refresh                | Rebuilds 6-year OHLCV history for assets affected by newly ingested corporate events. |
 | `market_news_morning`         | Mon-Fri (7 AM ICT) | News Intelligence (Active)                 | Fetches VN stock news, stores in Supabase, sends AI summary to Telegram.       |
 | `portfolio_schedule_snapshot` | Hourly (24/7)      | Epic 7 – Portfolio Tracking                | Triggers portfolio performance snapshots via NestJS API.                       |
