@@ -239,13 +239,13 @@ with DAG(
     on_failure_callback=send_failure_notification,
 ) as dag:
 
-    @task
+    @task(show_return_value_in_logs=False)
     def list_ratio_assets():
         assets = get_active_vn_stock_tickers(raise_on_fallback=True)
         print(f"Fetched {len(assets)} active VN stock tickers for ratios pipeline.")
         return assets
 
-    @task
+    @task(show_return_value_in_logs=False)
     def chunk_ratio_assets(assets):
         chunks = []
         for chunk_index, asset_chunk in enumerate(

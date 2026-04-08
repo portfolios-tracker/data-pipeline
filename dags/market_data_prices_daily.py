@@ -1,32 +1,59 @@
-from airflow import DAG
-from airflow.sdk import task
+import os
 from datetime import datetime, timedelta
 from itertools import islice
-from pendulum import timezone
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-import os
+from airflow import DAG
+from airflow.sdk import task
+from pendulum import timezone
 
 try:
     from etl_modules.fetcher import fetch_stock_price, get_active_vn_stock_tickers
     from etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
         raise
     from dags.etl_modules.fetcher import fetch_stock_price, get_active_vn_stock_tickers
     from dags.etl_modules.notifications import (
-        send_success_notification,
         send_failure_notification,
+        send_success_notification,
     )
 
 
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
+VCI_GRAPHQL_POOL = "vci_graphql"
+PRICE_INDICATOR_LOOKBACK_DAYS = int(os.getenv("PRICE_INDICATOR_LOOKBACK_DAYS", "250"))
+PRICE_LOAD_WINDOW_DAYS = int(os.getenv("PRICE_LOAD_WINDOW_DAYS", "7"))
+PRICE_COLUMNS = (
+    "trading_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "asset_id",
+    "source",
+)
+PRICES_UPSERT_SQL = """
+INSERT INTO market_data.prices
+    (trading_date, open, high, low, close, volume, asset_id, source)
+VALUES %s
+ON CONFLICT (asset_id, trading_date) DO UPDATE SET
+    open          = EXCLUDED.open,
+    high          = EXCLUDED.high,
+    low           = EXCLUDED.low,
+    close         = EXCLUDED.close,
+    volume        = EXCLUDED.volume,
+    source        = EXCLUDED.source,
+    ingested_at   = NOW()
+"""
 
 default_args = {
     "owner": "data_engineer",
@@ -45,21 +72,6 @@ def _chunked_rows(rows, chunk_size):
         if not chunk:
             return
         yield chunk
-
-
-def _to_payload(records, failed_symbols):
-    return {
-        "records": records,
-        "failed_symbols": failed_symbols,
-    }
-
-
-def _unpack_payload(data):
-    if isinstance(data, dict):
-        return data.get("records", []), data.get("failed_symbols", [])
-    if isinstance(data, list):
-        return data, []
-    return [], []
 
 
 def _parse_date_value(value):
@@ -132,69 +144,69 @@ with DAG(
     on_success_callback=send_success_notification,
     on_failure_callback=send_failure_notification,
 ) as dag:
+
+    @task(show_return_value_in_logs=False)
+    def list_price_assets():
+        assets = get_active_vn_stock_tickers(raise_on_fallback=True)
+        print(f"Fetched {len(assets)} active VN stock tickers for prices pipeline.")
+        return assets
+
+    @task(show_return_value_in_logs=False)
+    def chunk_price_assets(assets):
+        chunks = []
+        for chunk_index, asset_chunk in enumerate(
+            _chunked_rows(assets, DB_UPSERT_BATCH_SIZE), start=1
+        ):
+            chunks.append({"chunk_index": chunk_index, "assets": asset_chunk})
+
+        print(
+            f"Prepared {len(chunks)} price chunks (chunk_size={DB_UPSERT_BATCH_SIZE})."
+        )
+        return chunks
+
     @task
-    def extract_prices():
+    def process_price_chunk(chunk_payload):
+        chunk_index = int(chunk_payload.get("chunk_index") or 0)
+        assets = chunk_payload.get("assets") or []
         price_data = []
         failed_symbols = []
-        assets = get_active_vn_stock_tickers(raise_on_fallback=True)
-        print(f"RUNNING DAILY INCREMENTAL (7 DAYS) for {len(assets)} tickers")
-        # Fetch 250 days for indicator calculation, but only keep last 7 days
-        lookback_date = (datetime.today() - timedelta(days=250)).strftime("%Y-%m-%d")
+
+        lookback_date = (
+            datetime.today() - timedelta(days=PRICE_INDICATOR_LOOKBACK_DAYS)
+        ).strftime("%Y-%m-%d")
         end_date = datetime.today().strftime("%Y-%m-%d")
-        filter_from = (datetime.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+        filter_from = (
+            datetime.today() - timedelta(days=PRICE_LOAD_WINDOW_DAYS)
+        ).strftime("%Y-%m-%d")
         print(
-            f"Fetching prices from {lookback_date} to {end_date} (will filter to last 7 days)"
+            f"process_price_chunk[{chunk_index}] fetching prices from {lookback_date} "
+            f"to {end_date} (filtering to last {PRICE_LOAD_WINDOW_DAYS} days)"
         )
 
         for asset in assets:
-            symbol = asset["symbol"]
-            asset_id = asset["asset_id"]
+            symbol = str(asset.get("symbol") or "").strip().upper()
+            asset_id = str(asset.get("asset_id") or "").strip()
+            if not symbol or not asset_id:
+                failed_symbols.append(
+                    {
+                        "symbol": symbol or "unknown",
+                        "error": "missing symbol or asset_id in chunk payload",
+                    }
+                )
+                continue
             try:
                 df_price = fetch_stock_price(symbol, asset_id, lookback_date, end_date)
             except Exception as exc:
                 failed_symbols.append({"symbol": symbol, "error": str(exc)})
-                print(f"Price extraction failed for {symbol}: {exc}")
                 continue
             if not df_price.empty:
-                # Filter to only last 7 days for insertion
                 df_price = df_price[df_price["trading_date"].astype(str) >= filter_from]
                 price_data.append(df_price)
 
+        records = []
         if price_data:
             final_price_df = pd.concat(price_data, ignore_index=True)
-            # Convert date objects to strings for JSON serialization
-            if "trading_date" in final_price_df.columns:
-                final_price_df["trading_date"] = final_price_df["trading_date"].astype(str)
             records = final_price_df.to_dict("records")
-        else:
-            records = []
-        _report_failed_symbols("extract_prices", failed_symbols)
-        return _to_payload(records, failed_symbols)
-
-    @task
-    def load_prices(data):
-        records, failed_symbols = _unpack_payload(data)
-        _report_failed_symbols("load_prices (extract)", failed_symbols)
-        if not records:
-            print("No price data to load.")
-            return {"failed_symbols": failed_symbols, "failed_rows": [], "failed_batches": []}
-
-        if not SUPABASE_DB_URL:
-            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
-
-        print("Connecting to Supabase/Postgres...")
-        conn = psycopg2.connect(SUPABASE_DB_URL)
-
-        price_cols = [
-            "trading_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "asset_id",
-            "source",
-        ]
 
         rows = []
         failed_rows = []
@@ -204,7 +216,7 @@ with DAG(
                 parsed_date = _parse_date_value(row.get("trading_date"))
                 row_values = dict(row)
                 row_values["trading_date"] = parsed_date
-                rows.append(tuple(row_values.get(col) for col in price_cols))
+                rows.append(tuple(row_values.get(col) for col in PRICE_COLUMNS))
             except Exception as exc:
                 failed_rows.append(
                     {
@@ -213,36 +225,136 @@ with DAG(
                     }
                 )
 
-        print(f"Upserting {len(rows)} price rows into market_data.prices...")
-        try:
-            failed_batches = _upsert_rows_in_batches(
-                conn,
-                """
-                INSERT INTO market_data.prices
-                    (trading_date, open, high, low, close, volume, asset_id,
-                     source)
-                VALUES %s
-                ON CONFLICT (asset_id, trading_date) DO UPDATE SET
-                    open          = EXCLUDED.open,
-                    high          = EXCLUDED.high,
-                    low           = EXCLUDED.low,
-                    close         = EXCLUDED.close,
-                    volume        = EXCLUDED.volume,
-                    source        = EXCLUDED.source,
-                    ingested_at   = NOW()
-                """,
-                rows,
-                table_name="market_data.prices",
+        failed_batches = []
+        fatal_error = None
+        if rows and not SUPABASE_DB_URL:
+            fatal_error = "SUPABASE_DB_URL environment variable is not set"
+
+        if rows and SUPABASE_DB_URL:
+            print(
+                f"Upserting {len(rows)} price rows for chunk {chunk_index} into "
+                "market_data.prices..."
             )
-            _report_failed_symbols("load_prices (row conversion)", failed_rows)
-        finally:
-            conn.close()
-        return {
+            conn = None
+            try:
+                conn = psycopg2.connect(SUPABASE_DB_URL)
+                failed_batches = _upsert_rows_in_batches(
+                    conn,
+                    PRICES_UPSERT_SQL,
+                    rows,
+                    table_name="market_data.prices",
+                )
+            except Exception as exc:
+                fatal_error = str(exc)
+            finally:
+                if conn:
+                    conn.close()
+
+        _report_failed_symbols(f"process_price_chunk[{chunk_index}]", failed_symbols)
+        _report_failed_symbols(
+            f"process_price_chunk[{chunk_index}] (row conversion)", failed_rows
+        )
+        failed_batch_rows = sum(int(item.get("size") or 0) for item in failed_batches)
+        loaded_rows = max(len(rows) - failed_batch_rows, 0)
+
+        summary = {
+            "chunk_index": chunk_index,
+            "chunk_assets": len(assets),
+            "records_extracted": len(records),
+            "rows_prepared": len(rows),
+            "rows_loaded": loaded_rows,
             "failed_symbols": failed_symbols,
             "failed_rows": failed_rows,
             "failed_batches": failed_batches,
+            "fatal_error": fatal_error,
+        }
+        print(
+            "process_price_chunk summary: "
+            f"chunk={chunk_index}, assets={summary['chunk_assets']}, "
+            f"extracted={summary['records_extracted']}, "
+            f"loaded={summary['rows_loaded']}, "
+            f"failed_symbols={len(failed_symbols)}, "
+            f"failed_rows={len(failed_rows)}, "
+            f"failed_batches={len(failed_batches)}, "
+            f"fatal_error={bool(fatal_error)}"
+        )
+        return summary
+
+    @task(trigger_rule="all_done")
+    def finalize_prices_load(chunk_results):
+        results = [
+            result for result in (chunk_results or []) if isinstance(result, dict)
+        ]
+        if not results:
+            raise RuntimeError("No chunk results were produced for prices pipeline")
+
+        total_assets = sum(int(result.get("chunk_assets") or 0) for result in results)
+        total_extracted = sum(
+            int(result.get("records_extracted") or 0) for result in results
+        )
+        total_loaded = sum(int(result.get("rows_loaded") or 0) for result in results)
+
+        failed_symbols = []
+        failed_rows = []
+        failed_batches = []
+        fatal_errors = []
+        for result in results:
+            failed_symbols.extend(result.get("failed_symbols") or [])
+            failed_rows.extend(result.get("failed_rows") or [])
+            failed_batches.extend(result.get("failed_batches") or [])
+            fatal_error = result.get("fatal_error")
+            if fatal_error:
+                fatal_errors.append(
+                    {
+                        "symbol": f"chunk-{result.get('chunk_index')}",
+                        "error": str(fatal_error),
+                    }
+                )
+
+        print(
+            "prices pipeline summary: "
+            f"chunks={len(results)}, assets={total_assets}, extracted={total_extracted}, "
+            f"loaded={total_loaded}, failed_symbols={len(failed_symbols)}, "
+            f"failed_rows={len(failed_rows)}, failed_batches={len(failed_batches)}, "
+            f"fatal_errors={len(fatal_errors)}"
+        )
+
+        _report_failed_symbols("finalize_prices_load (symbol failures)", failed_symbols)
+        _report_failed_symbols("finalize_prices_load (row failures)", failed_rows)
+        _report_failed_symbols("finalize_prices_load (fatal errors)", fatal_errors)
+
+        if fatal_errors:
+            raise RuntimeError(
+                "Prices pipeline completed with fatal chunk errors: "
+                f"fatal_errors={len(fatal_errors)}"
+            )
+
+        alert_mode = bool(failed_symbols or failed_rows or failed_batches)
+        if alert_mode:
+            print(
+                "prices pipeline alert mode: partial failures detected but DAG will "
+                "complete successfully to avoid replaying already-loaded chunks. "
+                f"failed_symbols={len(failed_symbols)}, "
+                f"failed_rows={len(failed_rows)}, "
+                f"failed_batches={len(failed_batches)}"
+            )
+
+        return {
+            "chunks": len(results),
+            "assets": total_assets,
+            "records_extracted": total_extracted,
+            "rows_loaded": total_loaded,
+            "alert_mode": alert_mode,
+            "failed_symbols": len(failed_symbols),
+            "failed_rows": len(failed_rows),
+            "failed_batches": len(failed_batches),
         }
 
-    extracted_prices = extract_prices()
-    loaded_prices = load_prices(extracted_prices)
-    extracted_prices >> loaded_prices
+    price_assets = list_price_assets()
+    price_chunks = chunk_price_assets(price_assets)
+    chunk_summaries = process_price_chunk.override(pool=VCI_GRAPHQL_POOL).expand(
+        chunk_payload=price_chunks
+    )
+    final_summary = finalize_prices_load(chunk_summaries)
+
+    _ = price_assets >> price_chunks >> chunk_summaries >> final_summary

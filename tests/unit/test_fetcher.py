@@ -672,6 +672,32 @@ class TestFetchCorporateEvents:
         result = fetch_corporate_events("VCI", "asset-vci")
         assert result.empty
 
+    @patch("dags.etl_modules.fetcher.fetch_vietstock_corporate_events_frame")
+    def test_corporate_events_honors_explicit_date_window(self, mock_events_frame):
+        mock_events_frame.return_value = pd.DataFrame(
+            {
+                "event_id": [12345],
+                "event_date": [date(2026, 5, 7)],
+                "public_date": [date(2026, 4, 6)],
+                "exright_date": [date(2026, 4, 5)],
+                "event_title": ["VCI dividend notice"],
+                "event_type": ["Cash dividend"],
+                "event_description": ["Cash payout 5%"],
+            }
+        )
+
+        result = fetch_corporate_events(
+            "VCI",
+            "asset-vci",
+            from_date="2026-01-01",
+            to_date="2026-02-01",
+        )
+
+        assert not result.empty
+        kwargs = mock_events_frame.call_args.kwargs
+        assert kwargs["from_date"] == "2026-01-01"
+        assert kwargs["to_date"] == "2026-02-01"
+
 
 @pytest.mark.unit
 class TestFetchNews:

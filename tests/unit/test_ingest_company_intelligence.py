@@ -10,7 +10,11 @@ Tests cover:
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from dags.ingest_company_intelligence import build_embedding_text
+from dags.ingest_company_intelligence import (
+    build_embedding_text,
+    chunk_company_tickers,
+    finalize_company_intelligence,
+)
 
 
 @pytest.mark.unit
@@ -415,3 +419,58 @@ class TestBatchProcessing:
         with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
             with pytest.raises(ValueError, match="Embedding count mismatch"):
                 generate_and_upsert_embeddings(**context)
+
+
+@pytest.mark.unit
+def test_chunk_company_tickers_splits_by_chunk_size(monkeypatch):
+    monkeypatch.setattr("dags.ingest_company_intelligence.COMPANY_INTEL_CHUNK_SIZE", 2)
+    tickers = [
+        {"symbol": "AAA", "exchange": "HOSE"},
+        {"symbol": "BBB", "exchange": "HOSE"},
+        {"symbol": "CCC", "exchange": "HNX"},
+        {"symbol": "DDD", "exchange": "UPCOM"},
+        {"symbol": "EEE", "exchange": "HOSE"},
+    ]
+
+    chunks = chunk_company_tickers.function(tickers)
+
+    assert len(chunks) == 3
+    assert chunks[0]["chunk_index"] == 1
+    assert len(chunks[0]["tickers"]) == 2
+    assert chunks[2]["chunk_index"] == 3
+    assert len(chunks[2]["tickers"]) == 1
+
+
+@pytest.mark.unit
+def test_finalize_company_intelligence_returns_alert_for_partial_failures():
+    chunk_results = [
+        {
+            "chunk_index": 1,
+            "chunk_tickers": 2,
+            "profiles_fetched": 2,
+            "embeddings_generated": 2,
+            "rows_upserted": 2,
+            "failed_tickers": [],
+            "failed_embedding_batches": [],
+            "failed_upsert_batches": [],
+            "fatal_error": None,
+        },
+        {
+            "chunk_index": 2,
+            "chunk_tickers": 2,
+            "profiles_fetched": 1,
+            "embeddings_generated": 1,
+            "rows_upserted": 1,
+            "failed_tickers": [{"symbol": "BBB", "error": "empty overview"}],
+            "failed_embedding_batches": [],
+            "failed_upsert_batches": [{"batch_index": 1, "size": 1, "error": "db"}],
+            "fatal_error": None,
+        },
+    ]
+
+    result = finalize_company_intelligence.function(chunk_results)
+
+    assert result["alert_mode"] is True
+    assert result["failed_tickers"] == 1
+    assert result["failed_embedding_batches"] == 0
+    assert result["failed_upsert_batches"] == 1

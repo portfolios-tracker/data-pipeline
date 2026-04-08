@@ -698,8 +698,15 @@ def fetch_balance_sheet(symbol, asset_id):
 
 
 @cached_data(ttl_seconds=86400)  # 24 hours
-def fetch_corporate_events(symbol, asset_id):
-    from_date, to_date = default_corp_action_date_window()
+def fetch_corporate_events(
+    symbol,
+    asset_id,
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    if not from_date or not to_date:
+        from_date, to_date = default_corp_action_date_window()
     df = fetch_vietstock_corporate_events_frame(
         symbol,
         from_date=from_date,

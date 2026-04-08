@@ -12,10 +12,11 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 from typing import cast
 
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import task
 from google import genai
 
 try:
@@ -29,6 +30,12 @@ from supabase import Client, create_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+VCI_GRAPHQL_POOL = "vci_graphql"
+COMPANY_INTEL_CHUNK_SIZE = int(os.getenv("COMPANY_INTEL_CHUNK_SIZE", "50"))
+EMBEDDING_BATCH_SIZE = int(os.getenv("COMPANY_INTEL_EMBEDDING_BATCH_SIZE", "100"))
+PROFILE_FETCH_SLEEP_SECONDS = float(
+    os.getenv("COMPANY_INTEL_PROFILE_FETCH_SLEEP_SECONDS", "0.5")
+)
 
 
 # Temporary guardrail intentionally disabled.
@@ -87,14 +94,16 @@ def build_embedding_text(
     return f"{company_profile}\n\nSector: {sector_str}"
 
 
-def fetch_company_profiles(**context):
-    """
-    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via the VCI provider.
+def _chunked_rows(rows, chunk_size):
+    iterator = iter(rows)
+    while True:
+        chunk = list(islice(iterator, chunk_size))
+        if not chunk:
+            return
+        yield chunk
 
-    - Rate limited: 0.5s sleep between API calls
-    - Logs progress every 50 tickers
-    - Skips tickers where vnstock returns no data
-    """
+
+def _load_active_vn_tickers() -> list[tuple[str, str]]:
     supabase = get_supabase_client()
     logger.info("Querying active VN tickers from Supabase market_data.assets...")
     response = (
@@ -107,6 +116,7 @@ def fetch_company_profiles(**context):
         .order("symbol")
         .execute()
     )
+
     tickers = []
     rows = cast(list[dict], response.data or [])
     for row in rows:
@@ -119,11 +129,21 @@ def fetch_company_profiles(**context):
         symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
         if symbol_type and symbol_type != "STOCK":
             continue
-        # Heuristic guardrail intentionally disabled:
-        # if not symbol_type and _looks_like_non_equity_vn_symbol(symbol):
-        #     continue
-        tickers.append((symbol, row.get("exchange") or ""))
-    logger.info(f"Found {len(tickers)} active VN tickers")
+        tickers.append((symbol, str(row.get("exchange") or "")))
+
+    logger.info("Found %s active VN tickers", len(tickers))
+    return tickers
+
+
+def fetch_company_profiles(**context):
+    """
+    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via the VCI provider.
+
+    - Rate limited: 0.5s sleep between API calls
+    - Logs progress every 50 tickers
+    - Skips tickers where vnstock returns no data
+    """
+    tickers = _load_active_vn_tickers()
 
     profiles = []
 
@@ -133,7 +153,7 @@ def fetch_company_profiles(**context):
 
             if overview is None or overview.empty:
                 logger.warning(f"No overview data for {symbol}, skipping")
-                time.sleep(0.5)
+                time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
                 continue
 
             row = overview.iloc[0]
@@ -144,7 +164,7 @@ def fetch_company_profiles(**context):
 
             if not company_profile:
                 logger.warning(f"Empty company_profile for {symbol}, skipping")
-                time.sleep(0.5)
+                time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
                 continue
 
             profiles.append(
@@ -165,7 +185,7 @@ def fetch_company_profiles(**context):
         except Exception as e:
             logger.warning(f"Failed to fetch profile for {symbol}: {e}")
 
-        time.sleep(0.5)
+        time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
 
     logger.info(f"Successfully fetched {len(profiles)} company profiles")
 
@@ -199,10 +219,14 @@ def generate_and_upsert_embeddings(**context):
         for p in profiles
     ]
 
-    logger.info(f"Generating embeddings for {len(texts)} profiles in batches of 100...")
+    logger.info(
+        "Generating embeddings for %s profiles in batches of %s...",
+        len(texts),
+        EMBEDDING_BATCH_SIZE,
+    )
 
     all_embeddings = []
-    batch_size = 100
+    batch_size = EMBEDDING_BATCH_SIZE
 
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
@@ -292,22 +316,314 @@ def backfill_dim_assets_description(**context):
     return 0
 
 
-task_fetch_profiles = PythonOperator(
-    task_id="fetch_company_profiles",
-    python_callable=fetch_company_profiles,
-    dag=dag,
-)
+@task(show_return_value_in_logs=False)
+def list_company_tickers():
+    tickers = _load_active_vn_tickers()
+    return [{"symbol": symbol, "exchange": exchange} for symbol, exchange in tickers]
 
-task_embed_and_upsert = PythonOperator(
-    task_id="generate_and_upsert_embeddings",
-    python_callable=generate_and_upsert_embeddings,
-    dag=dag,
-)
 
-task_backfill = PythonOperator(
-    task_id="backfill_dim_assets_description",
-    python_callable=backfill_dim_assets_description,
-    dag=dag,
-)
+@task(show_return_value_in_logs=False)
+def chunk_company_tickers(tickers):
+    chunks = []
+    for chunk_index, ticker_chunk in enumerate(
+        _chunked_rows(tickers, COMPANY_INTEL_CHUNK_SIZE), start=1
+    ):
+        chunks.append({"chunk_index": chunk_index, "tickers": ticker_chunk})
 
-_ = task_fetch_profiles >> [task_embed_and_upsert, task_backfill]
+    logger.info(
+        "Prepared %s company intelligence chunks (chunk_size=%s)",
+        len(chunks),
+        COMPANY_INTEL_CHUNK_SIZE,
+    )
+    return chunks
+
+
+@task
+def process_company_intelligence_chunk(chunk_payload):
+    chunk_index = int(chunk_payload.get("chunk_index") or 0)
+    ticker_rows = chunk_payload.get("tickers") or []
+    chunk_tickers = [
+        (str(item.get("symbol") or "").strip().upper(), str(item.get("exchange") or ""))
+        for item in ticker_rows
+        if str(item.get("symbol") or "").strip()
+    ]
+
+    failed_tickers = []
+    failed_embedding_batches = []
+    failed_upsert_batches = []
+    fatal_error = None
+
+    try:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            raise ValueError("GEMINI_API_KEY environment variable not set")
+        client = genai.Client(api_key=gemini_key)
+        supabase = get_supabase_client()
+    except Exception as exc:
+        fatal_error = str(exc)
+        logger.error(
+            "process_company_intelligence_chunk[%s] setup failed: %s",
+            chunk_index,
+            exc,
+        )
+        return {
+            "chunk_index": chunk_index,
+            "chunk_tickers": len(chunk_tickers),
+            "profiles_fetched": 0,
+            "embeddings_generated": 0,
+            "rows_upserted": 0,
+            "failed_tickers": failed_tickers,
+            "failed_embedding_batches": failed_embedding_batches,
+            "failed_upsert_batches": failed_upsert_batches,
+            "fatal_error": fatal_error,
+        }
+
+    profiles = []
+    for symbol, exchange in chunk_tickers:
+        try:
+            overview = fetch_company_overview(symbol)
+            if overview is None or overview.empty:
+                failed_tickers.append({"symbol": symbol, "error": "empty overview"})
+                time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
+                continue
+
+            row = overview.iloc[0]
+            company_profile = str(row.get("company_profile", "") or "").strip()
+            if not company_profile:
+                failed_tickers.append(
+                    {"symbol": symbol, "error": "empty company_profile"}
+                )
+                time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
+                continue
+
+            profiles.append(
+                {
+                    "ticker_symbol": symbol,
+                    "exchange": exchange,
+                    "content_type": "company_profile",
+                    "company_profile": company_profile,
+                    "icb_name2": str(row.get("icb_name2", "") or "").strip(),
+                    "icb_name3": str(row.get("icb_name3", "") or "").strip(),
+                    "icb_name4": str(row.get("icb_name4", "") or "").strip(),
+                }
+            )
+        except Exception as exc:
+            failed_tickers.append({"symbol": symbol, "error": str(exc)})
+
+        time.sleep(PROFILE_FETCH_SLEEP_SECONDS)
+
+    embedded_payloads = []
+    for offset in range(0, len(profiles), EMBEDDING_BATCH_SIZE):
+        profile_batch = profiles[offset : offset + EMBEDDING_BATCH_SIZE]
+        text_batch = [
+            build_embedding_text(
+                profile["company_profile"],
+                profile["icb_name2"],
+                profile["icb_name3"],
+                profile["icb_name4"],
+            )
+            for profile in profile_batch
+        ]
+
+        try:
+            response = client.models.embed_content(
+                model="text-embedding-004",
+                contents=text_batch,  # type: ignore[arg-type]
+                config={"task_type": "CLUSTERING"},
+            )
+            embeddings = getattr(response, "embeddings", None) or []
+            values = [embedding.values for embedding in embeddings]
+            if len(values) != len(profile_batch):
+                raise ValueError(
+                    "Embedding count mismatch for chunk "
+                    f"{chunk_index} batch {offset // EMBEDDING_BATCH_SIZE + 1}: "
+                    f"expected {len(profile_batch)}, got {len(values)}"
+                )
+            embedded_payloads.extend(
+                [
+                    {
+                        "profile": profile,
+                        "text": text,
+                        "embedding": embedding_values,
+                    }
+                    for profile, text, embedding_values in zip(
+                        profile_batch, text_batch, values
+                    )
+                ]
+            )
+        except Exception as exc:
+            failed_embedding_batches.append(
+                {
+                    "batch_index": offset // EMBEDDING_BATCH_SIZE + 1,
+                    "size": len(profile_batch),
+                    "error": str(exc),
+                }
+            )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    records = []
+    for payload in embedded_payloads:
+        profile = payload["profile"]
+        records.append(
+            {
+                "ticker_symbol": profile["ticker_symbol"],
+                "exchange": profile["exchange"],
+                "content_type": profile["content_type"],
+                "content": payload["text"],
+                "embedding": payload["embedding"],
+                "metadata": {
+                    "icb_name2": profile["icb_name2"],
+                    "icb_name3": profile["icb_name3"],
+                    "icb_name4": profile["icb_name4"],
+                    "source": "vnstock_vci_gemini",
+                },
+                "updated_at": now_iso,
+            }
+        )
+
+    total_upserted = 0
+    for offset in range(0, len(records), EMBEDDING_BATCH_SIZE):
+        batch = records[offset : offset + EMBEDDING_BATCH_SIZE]
+        try:
+            supabase.table("market_data.company_embeddings").upsert(
+                batch,
+                ignore_duplicates=False,
+                on_conflict="ticker_symbol,content_type",
+            ).execute()
+            total_upserted += len(batch)
+        except Exception as exc:
+            failed_upsert_batches.append(
+                {
+                    "batch_index": offset // EMBEDDING_BATCH_SIZE + 1,
+                    "size": len(batch),
+                    "error": str(exc),
+                }
+            )
+
+    summary = {
+        "chunk_index": chunk_index,
+        "chunk_tickers": len(chunk_tickers),
+        "profiles_fetched": len(profiles),
+        "embeddings_generated": len(embedded_payloads),
+        "rows_upserted": total_upserted,
+        "failed_tickers": failed_tickers,
+        "failed_embedding_batches": failed_embedding_batches,
+        "failed_upsert_batches": failed_upsert_batches,
+        "fatal_error": fatal_error,
+    }
+    logger.info(
+        "process_company_intelligence_chunk summary: chunk=%s tickers=%s "
+        "profiles=%s embeddings=%s rows_upserted=%s failed_tickers=%s "
+        "failed_embedding_batches=%s failed_upsert_batches=%s fatal_error=%s",
+        summary["chunk_index"],
+        summary["chunk_tickers"],
+        summary["profiles_fetched"],
+        summary["embeddings_generated"],
+        summary["rows_upserted"],
+        len(failed_tickers),
+        len(failed_embedding_batches),
+        len(failed_upsert_batches),
+        bool(fatal_error),
+    )
+    return summary
+
+
+@task(trigger_rule="all_done")
+def finalize_company_intelligence(chunk_results):
+    results = [result for result in (chunk_results or []) if isinstance(result, dict)]
+    if not results:
+        raise RuntimeError("No chunk results were produced for company intelligence")
+
+    totals = {
+        "chunks": len(results),
+        "tickers": sum(int(result.get("chunk_tickers") or 0) for result in results),
+        "profiles": sum(int(result.get("profiles_fetched") or 0) for result in results),
+        "embeddings": sum(
+            int(result.get("embeddings_generated") or 0) for result in results
+        ),
+        "rows_upserted": sum(
+            int(result.get("rows_upserted") or 0) for result in results
+        ),
+    }
+
+    failed_tickers = []
+    failed_embedding_batches = []
+    failed_upsert_batches = []
+    fatal_errors = []
+    for result in results:
+        failed_tickers.extend(result.get("failed_tickers") or [])
+        failed_embedding_batches.extend(result.get("failed_embedding_batches") or [])
+        failed_upsert_batches.extend(result.get("failed_upsert_batches") or [])
+        fatal_error = result.get("fatal_error")
+        if fatal_error:
+            fatal_errors.append(
+                {
+                    "chunk_index": result.get("chunk_index"),
+                    "error": str(fatal_error),
+                }
+            )
+
+    logger.info(
+        "company intelligence summary: chunks=%s tickers=%s profiles=%s "
+        "embeddings=%s rows_upserted=%s failed_tickers=%s "
+        "failed_embedding_batches=%s failed_upsert_batches=%s fatal_errors=%s",
+        totals["chunks"],
+        totals["tickers"],
+        totals["profiles"],
+        totals["embeddings"],
+        totals["rows_upserted"],
+        len(failed_tickers),
+        len(failed_embedding_batches),
+        len(failed_upsert_batches),
+        len(fatal_errors),
+    )
+
+    if fatal_errors:
+        raise RuntimeError(
+            "Company intelligence pipeline completed with fatal chunk errors: "
+            f"fatal_errors={len(fatal_errors)}"
+        )
+
+    alert_mode = bool(
+        failed_tickers or failed_embedding_batches or failed_upsert_batches
+    )
+    if alert_mode:
+        logger.warning(
+            "company intelligence alert mode: partial failures detected but DAG "
+            "will complete successfully. failed_tickers=%s "
+            "failed_embedding_batches=%s failed_upsert_batches=%s",
+            len(failed_tickers),
+            len(failed_embedding_batches),
+            len(failed_upsert_batches),
+        )
+
+    return {
+        **totals,
+        "alert_mode": alert_mode,
+        "failed_tickers": len(failed_tickers),
+        "failed_embedding_batches": len(failed_embedding_batches),
+        "failed_upsert_batches": len(failed_upsert_batches),
+    }
+
+
+@task
+def run_backfill_placeholder():
+    return backfill_dim_assets_description()
+
+
+with dag:
+    company_tickers = list_company_tickers()
+    company_chunks = chunk_company_tickers(company_tickers)
+    chunk_results = process_company_intelligence_chunk.override(
+        pool=VCI_GRAPHQL_POOL
+    ).expand(chunk_payload=company_chunks)
+    company_summary = finalize_company_intelligence(chunk_results)
+    backfill_result = run_backfill_placeholder()
+
+    _ = (
+        company_tickers
+        >> company_chunks
+        >> chunk_results
+        >> company_summary
+        >> backfill_result
+    )
