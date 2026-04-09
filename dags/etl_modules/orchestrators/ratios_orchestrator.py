@@ -181,7 +181,7 @@ def finalize_ratio_load(chunk_results: list[ChunkSummary] | None) -> FinalizeSum
     report_failed_symbols("finalize_ratio_load (row failures)", failed_rows)
     report_failed_symbols("finalize_ratio_load (fatal errors)", fatal_errors)
     report_failed_symbols("finalize_ratio_load (batch write failures)", [
-        {"symbol": str(b.get("batch_index", "?")), "error": str(b.get("error", ""))}
+        {"symbol": f"batch-{b.get('batch_index', '?')}", "error": str(b.get("error", ""))}
         for b in failed_batches
     ])
 

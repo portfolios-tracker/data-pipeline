@@ -192,7 +192,7 @@ def test_finalize_ratio_load_raises_on_failed_batches():
 
 
 @pytest.mark.unit
-def test_finalize_ratio_load_alert_mode_on_non_fatal_failures():
+def test_finalize_ratio_load_sets_alert_mode_for_symbol_failures():
     partial_result = ratios_orchestrator.finalize_ratio_load(
         [
             {
