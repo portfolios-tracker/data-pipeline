@@ -152,27 +152,8 @@ def test_process_ratio_chunk_preserves_finite_values_and_sanitizes_non_finite():
 
 
 @pytest.mark.unit
-def test_finalize_ratio_load_raises_only_on_fatal_errors():
-    partial_result = ratios_orchestrator.finalize_ratio_load(
-        [
-            {
-                "chunk_index": 1,
-                "chunk_assets": 2,
-                "records_extracted": 10,
-                "rows_prepared": 10,
-                "rows_loaded": 9,
-                "failed_symbols": [{"symbol": "AAA", "error": "timeout"}],
-                "failed_rows": [],
-                "failed_batches": [{"batch_index": 1, "size": 1, "error": "db"}],
-                "fatal_error": None,
-            }
-        ]
-    )
-
-    assert partial_result["alert_mode"] is True
-    assert partial_result["failed_batches"] == 1
-
-    with pytest.raises(RuntimeError):
+def test_finalize_ratio_load_raises_on_fatal_errors():
+    with pytest.raises(RuntimeError, match="fatal chunk errors"):
         ratios_orchestrator.finalize_ratio_load(
             [
                 {
@@ -188,6 +169,48 @@ def test_finalize_ratio_load_raises_only_on_fatal_errors():
                 }
             ]
         )
+
+
+@pytest.mark.unit
+def test_finalize_ratio_load_raises_on_failed_batches():
+    with pytest.raises(RuntimeError, match="DB write failures"):
+        ratios_orchestrator.finalize_ratio_load(
+            [
+                {
+                    "chunk_index": 1,
+                    "chunk_assets": 2,
+                    "records_extracted": 10,
+                    "rows_prepared": 10,
+                    "rows_loaded": 9,
+                    "failed_symbols": [{"symbol": "AAA", "error": "timeout"}],
+                    "failed_rows": [],
+                    "failed_batches": [{"batch_index": 1, "size": 1, "error": "db"}],
+                    "fatal_error": None,
+                }
+            ]
+        )
+
+
+@pytest.mark.unit
+def test_finalize_ratio_load_alert_mode_on_non_fatal_failures():
+    partial_result = ratios_orchestrator.finalize_ratio_load(
+        [
+            {
+                "chunk_index": 1,
+                "chunk_assets": 2,
+                "records_extracted": 10,
+                "rows_prepared": 10,
+                "rows_loaded": 9,
+                "failed_symbols": [{"symbol": "AAA", "error": "timeout"}],
+                "failed_rows": [],
+                "failed_batches": [],
+                "fatal_error": None,
+            }
+        ]
+    )
+
+    assert partial_result["alert_mode"] is True
+    assert partial_result["failed_batches"] == 0
 
 
 @pytest.mark.unit

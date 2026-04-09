@@ -43,7 +43,7 @@ def convert_records_to_rows(
 
     for row in records:
         asset_id = row.get("asset_id")
-        symbol = row.get("symbol")
+        symbol = row.get("symbol") or row.get("ticker")
         try:
             row_values = dict(row)
             row_values["fiscal_date"] = parse_date_value(row.get("fiscal_date"))

@@ -180,6 +180,10 @@ def finalize_ratio_load(chunk_results: list[ChunkSummary] | None) -> FinalizeSum
     report_failed_symbols("finalize_ratio_load (symbol failures)", failed_symbols)
     report_failed_symbols("finalize_ratio_load (row failures)", failed_rows)
     report_failed_symbols("finalize_ratio_load (fatal errors)", fatal_errors)
+    report_failed_symbols("finalize_ratio_load (batch write failures)", [
+        {"symbol": str(b.get("batch_index", "?")), "error": str(b.get("error", ""))}
+        for b in failed_batches
+    ])
 
     if fatal_errors:
         raise RuntimeError(
@@ -187,14 +191,19 @@ def finalize_ratio_load(chunk_results: list[ChunkSummary] | None) -> FinalizeSum
             f"fatal_errors={len(fatal_errors)}"
         )
 
-    alert_mode = bool(failed_symbols or failed_rows or failed_batches)
+    if failed_batches:
+        raise RuntimeError(
+            "Ratios pipeline completed with DB write failures: "
+            f"failed_batches={len(failed_batches)}"
+        )
+
+    alert_mode = bool(failed_symbols or failed_rows)
     if alert_mode:
         print(
             "ratios pipeline alert mode: partial failures detected but DAG will "
             "complete successfully (non-fatal failures only). "
             f"failed_symbols={len(failed_symbols)}, "
-            f"failed_rows={len(failed_rows)}, "
-            f"failed_batches={len(failed_batches)}"
+            f"failed_rows={len(failed_rows)}"
         )
 
     return {
