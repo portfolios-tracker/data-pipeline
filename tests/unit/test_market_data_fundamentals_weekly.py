@@ -1,6 +1,17 @@
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+try:
+    import psycopg2  # noqa: F401
+except ModuleNotFoundError:
+    psycopg2_stub = types.ModuleType("psycopg2")
+    psycopg2_stub.connect = MagicMock()
+    psycopg2_stub.extras = types.SimpleNamespace(execute_values=MagicMock())
+    sys.modules["psycopg2"] = psycopg2_stub
+    sys.modules["psycopg2.extras"] = psycopg2_stub.extras
 
 from dags import market_data_fundamentals_weekly
 
@@ -12,6 +23,7 @@ def test_weekly_fundamentals_dag_has_expected_identity_schedule_and_tasks():
         "fundamental_pipeline.load_income_statements",
         "balance_sheet_group.extract_balance_sheets",
         "balance_sheet_group.load_balance_sheets",
+        "finalize_fundamentals_load",
     }
 
     assert market_data_fundamentals_weekly.dag.dag_id == "market_data_fundamentals_weekly"
@@ -86,3 +98,33 @@ def test_parse_date_value_handles_iso_and_sentinel_values():
     parsed = market_data_fundamentals_weekly._parse_date_value("2026-04-06")
     assert parsed.isoformat() == "2026-04-06"
     assert market_data_fundamentals_weekly._parse_date_value("NaT") is None
+
+
+@pytest.mark.unit
+def test_finalize_fundamentals_load_raises_when_failed_batches_exist():
+    finalizer = getattr(
+        market_data_fundamentals_weekly,
+        "finalize_fundamentals_load",
+        None,
+    )
+    assert finalizer is not None
+
+    income_summary = {
+        "records_input": 8,
+        "rows_prepared": 8,
+        "rows_loaded": 6,
+        "failed_symbols": [],
+        "failed_rows": [],
+        "failed_batches": [{"batch_index": 1, "size": 2, "error": "db timeout"}],
+    }
+    balance_summary = {
+        "records_input": 8,
+        "rows_prepared": 8,
+        "rows_loaded": 8,
+        "failed_symbols": [],
+        "failed_rows": [],
+        "failed_batches": [],
+    }
+
+    with pytest.raises(RuntimeError):
+        finalizer.function(income_summary, balance_summary)

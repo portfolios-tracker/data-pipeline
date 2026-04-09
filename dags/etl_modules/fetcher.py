@@ -7,15 +7,17 @@ import numpy as np
 import pandas as pd
 
 try:
-    from etl_modules.vci_provider import (
+    from etl_modules.kbs_provider import (
         fetch_balance_sheet as fetch_balance_sheet_frame,
     )
-    from etl_modules.vci_provider import fetch_company_news
-    from etl_modules.vci_provider import (
+    from etl_modules.kbs_provider import (
         fetch_financial_ratios as fetch_financial_ratio_frame,
     )
-    from etl_modules.vci_provider import (
+    from etl_modules.kbs_provider import (
         fetch_income_statement as fetch_income_statement_frame,
+    )
+    from etl_modules.vci_provider import (
+        fetch_company_news,
     )
     from etl_modules.vci_provider import (
         fetch_stock_price as fetch_stock_price_frame,
@@ -35,15 +37,17 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "etl_modules":
         raise
-    from dags.etl_modules.vci_provider import (
+    from dags.etl_modules.kbs_provider import (
         fetch_balance_sheet as fetch_balance_sheet_frame,
     )
-    from dags.etl_modules.vci_provider import fetch_company_news
-    from dags.etl_modules.vci_provider import (
+    from dags.etl_modules.kbs_provider import (
         fetch_financial_ratios as fetch_financial_ratio_frame,
     )
-    from dags.etl_modules.vci_provider import (
+    from dags.etl_modules.kbs_provider import (
         fetch_income_statement as fetch_income_statement_frame,
+    )
+    from dags.etl_modules.vci_provider import (
+        fetch_company_news,
     )
     from dags.etl_modules.vci_provider import (
         fetch_stock_price as fetch_stock_price_frame,
@@ -84,6 +88,7 @@ _VCI_TRANSIENT_ERROR_MARKERS = (
     "http 503 from https://trading.vietcap.com.vn",
     "http 504 from https://trading.vietcap.com.vn",
 )
+_FINANCE_SOURCE_PROVIDER = "KBS"
 
 
 def _extract_source_host(url: object) -> str | None:
@@ -172,6 +177,18 @@ def clean_decimal_cols(df, cols):
             df[col] = df[col].replace([np.inf, -np.inf], np.nan)
             # 3. Fill NaN with 0 and infer objects to avoid downcasting warning
             df[col] = df[col].fillna(0).infer_objects(copy=False)
+    return df
+
+
+def clean_decimal_cols_nullable(df, cols):
+    """
+    Helper to clean numeric columns while preserving missing values as NULL/NaN.
+    Used for finance datasets where source-missing values must not become zeros.
+    """
+    for col in cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
     return df
 
 
@@ -304,8 +321,8 @@ def fetch_financial_ratios(symbol, asset_id):
                         return original
             return None
 
-        year_col = get_col("yearReport")
-        quarter_col = get_col("lengthReport")
+        year_col = "year" if "year" in df.columns else get_col("yearReport")
+        quarter_col = "quarter" if "quarter" in df.columns else get_col("lengthReport")
         if not year_col or not quarter_col:
             return pd.DataFrame()
 
@@ -350,7 +367,7 @@ def fetch_financial_ratios(symbol, asset_id):
         }
 
         for target, aliases in metric_aliases.items():
-            src_col = get_col(*aliases)
+            src_col = target if target in df.columns else get_col(*aliases)
             out_df[target] = (
                 pd.to_numeric(df[src_col], errors="coerce")
                 if src_col
@@ -431,13 +448,17 @@ def fetch_financial_ratios(symbol, asset_id):
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
         out_df["ticker"] = symbol
         out_df["asset_id"] = asset_id
+        out_df["source_provider"] = _FINANCE_SOURCE_PROVIDER
+        out_df = clean_decimal_cols_nullable(out_df, list(metric_aliases.keys()))
 
         return out_df
 
     except Exception as e:
         if _is_transient_vci_failure(e):
             logging.warning(
-                "Transient VCI failure fetching ratios for %s: %s", symbol, e
+                "Transient finance source failure fetching ratios for %s: %s",
+                symbol,
+                e,
             )
         else:
             logging.error("Error ratios %s: %s", symbol, e, exc_info=True)
@@ -460,7 +481,7 @@ def fetch_income_stmt(symbol, asset_id):
         if df is None or df.empty:
             return pd.DataFrame()
 
-        # Mapping
+        # Mapping from legacy VCI labels and KBS canonical keys
         mapping = {
             "Net Sales": "revenue",
             "Cost of Sales": "cost_of_goods_sold",
@@ -477,6 +498,18 @@ def fetch_income_stmt(symbol, asset_id):
             "Other Income": "other_income",
             "Other Expense": "other_expenses",
             "EBITDA": "ebitda",
+            "revenue": "revenue",
+            "cost_of_goods_sold": "cost_of_goods_sold",
+            "gross_profit": "gross_profit",
+            "operating_profit": "operating_profit",
+            "net_profit_post_tax": "net_profit_post_tax",
+            "selling_expenses": "selling_expenses",
+            "admin_expenses": "admin_expenses",
+            "financial_income": "financial_income",
+            "financial_expenses": "financial_expenses",
+            "other_income": "other_income",
+            "other_expenses": "other_expenses",
+            "ebitda": "ebitda",
         }
 
         # Safe rename: only rename columns that exist
@@ -489,7 +522,9 @@ def fetch_income_stmt(symbol, asset_id):
         df_final = df.copy()
 
         # Handle Date
-        if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
+        if "year" in df_final.columns and "quarter" in df_final.columns:
+            pass
+        elif "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
             df_final["year"] = df_final["yearReport"]
             df_final["quarter"] = df_final["lengthReport"]
 
@@ -510,20 +545,22 @@ def fetch_income_stmt(symbol, asset_id):
                     pass
                 return None
 
-            df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
+            if "fiscal_date" not in df_final.columns:
+                df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
 
         df_final.dropna(subset=["year", "quarter", "fiscal_date"], inplace=True)
 
-        # Ensure columns exist and fill with 0 BEFORE type conversion
+        # Ensure expected columns exist and preserve missing values as NULL
         for col in required_metrics:
             if col not in df_final.columns:
-                df_final[col] = 0.0
+                df_final[col] = np.nan
 
-        # Clean Decimal Columns
-        df_final = clean_decimal_cols(df_final, required_metrics)
+        # Clean Decimal Columns while preserving NULLs
+        df_final = clean_decimal_cols_nullable(df_final, required_metrics)
 
         df_final["ticker"] = symbol
         df_final["asset_id"] = asset_id
+        df_final["source_provider"] = _FINANCE_SOURCE_PROVIDER
 
         # Select Final Columns
         final_cols = [
@@ -532,13 +569,16 @@ def fetch_income_stmt(symbol, asset_id):
             "fiscal_date",
             "year",
             "quarter",
+            "source_provider",
         ] + required_metrics
         return df_final[final_cols]
 
     except Exception as e:
         if _is_transient_vci_failure(e):
             logging.warning(
-                "Transient VCI failure fetching income stmt for %s: %s", symbol, e
+                "Transient finance source failure fetching income stmt for %s: %s",
+                symbol,
+                e,
             )
         else:
             logging.error(
@@ -620,7 +660,9 @@ def fetch_balance_sheet(symbol, asset_id):
         required_metrics = list(set(normalized_alias_map.values()))
         df_final = df.copy()
 
-        if "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
+        if "year" in df_final.columns and "quarter" in df_final.columns:
+            pass
+        elif "yearReport" in df_final.columns and "lengthReport" in df_final.columns:
             df_final["year"] = df_final["yearReport"]
             df_final["quarter"] = df_final["lengthReport"]
 
@@ -640,7 +682,8 @@ def fetch_balance_sheet(symbol, asset_id):
                     pass
                 return None
 
-            df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
+            if "fiscal_date" not in df_final.columns:
+                df_final["fiscal_date"] = df_final.apply(make_date, axis=1)
 
         df_final.dropna(subset=["year", "quarter", "fiscal_date"], inplace=True)
 
@@ -680,15 +723,24 @@ def fetch_balance_sheet(symbol, asset_id):
             df_final["total_liabilities"] - short_term_liabilities
         )
 
-        df_final = clean_decimal_cols(df_final, required_metrics)
+        df_final = clean_decimal_cols_nullable(df_final, required_metrics)
         df_final["asset_id"] = asset_id
+        df_final["source_provider"] = _FINANCE_SOURCE_PROVIDER
 
-        final_cols = ["asset_id", "fiscal_date", "year", "quarter"] + required_metrics
+        final_cols = [
+            "asset_id",
+            "fiscal_date",
+            "year",
+            "quarter",
+            "source_provider",
+        ] + required_metrics
         return df_final[final_cols]
     except Exception as e:
         if _is_transient_vci_failure(e):
             logging.warning(
-                "Transient VCI failure fetching balance sheet for %s: %s", symbol, e
+                "Transient finance source failure fetching balance sheet for %s: %s",
+                symbol,
+                e,
             )
         else:
             logging.error(

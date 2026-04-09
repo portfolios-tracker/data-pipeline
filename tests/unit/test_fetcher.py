@@ -395,6 +395,7 @@ class TestFetchIncomeStmt:
                 "fiscal_date",
                 "year",
                 "quarter",
+                "source_provider",
                 "revenue",
                 "cost_of_goods_sold",
                 "gross_profit",
@@ -404,6 +405,7 @@ class TestFetchIncomeStmt:
         ).issubset(result.columns)
         assert result["ticker"].iloc[0] == "HPG"
         assert result["fiscal_date"].iloc[0] == "2024-12-31"
+        assert result["source_provider"].iloc[0] == "KBS"
         # Values preserved and cleaned
         assert result["revenue"].iloc[0] == 5_000_000_000_000
 
@@ -420,8 +422,8 @@ class TestFetchIncomeStmt:
         result = fetch_income_stmt("HPG", "dummy_asset_id")
 
         assert not result.empty
-        assert result["operating_profit"].iloc[0] == 0.0
-        assert result["net_profit_post_tax"].iloc[0] == 0.0
+        assert pd.isna(result["operating_profit"].iloc[0])
+        assert pd.isna(result["net_profit_post_tax"].iloc[0])
 
     @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
     def test_income_stmt_empty_dataframe(self, mock_income_frame):
@@ -429,6 +431,32 @@ class TestFetchIncomeStmt:
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
         assert result.empty
+
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    def test_income_stmt_problematic_fields_remain_null_when_missing(
+        self, mock_income_frame
+    ):
+        mock_income_frame.return_value = pd.DataFrame(
+            {
+                "Net Sales": [3_000_000_000],
+                "Gross Profit": [800_000_000],
+                "yearReport": [2025],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
+
+        assert not result.empty
+        for col in [
+            "net_profit_post_tax",
+            "admin_expenses",
+            "financial_expenses",
+            "other_income",
+            "other_expenses",
+            "ebitda",
+        ]:
+            assert pd.isna(result[col].iloc[0])
 
     @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
     def test_income_stmt_coalesces_duplicate_mapped_columns(self, mock_income_frame):
@@ -465,7 +493,7 @@ class TestFetchIncomeStmt:
 
         assert result.empty
         assert any(
-            "Transient VCI failure fetching income stmt" in str(call.args[0])
+            "Transient finance source failure fetching income stmt" in str(call.args[0])
             for call in mock_warning.call_args_list
         )
         mock_error.assert_not_called()
@@ -525,7 +553,8 @@ class TestFetchBalanceSheet:
 
         assert result.empty
         assert any(
-            "Transient VCI failure fetching balance sheet" in str(call.args[0])
+            "Transient finance source failure fetching balance sheet"
+            in str(call.args[0])
             for call in mock_warning.call_args_list
         )
         mock_error.assert_not_called()

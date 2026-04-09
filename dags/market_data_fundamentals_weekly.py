@@ -6,7 +6,6 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 from airflow import DAG
-from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import TaskGroup, task
 from pendulum import timezone
 
@@ -35,7 +34,7 @@ except ModuleNotFoundError as exc:
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
-VCI_GRAPHQL_POOL = "vci_graphql"
+FINANCE_PROVIDER_POOL = os.getenv("FINANCE_PROVIDER_POOL", "kbs_finance")
 
 default_args = {
     "owner": "data_engineer",
@@ -176,6 +175,9 @@ with DAG(
         if not records:
             print("No income statement data to load.")
             return {
+                "records_input": 0,
+                "rows_prepared": 0,
+                "rows_loaded": 0,
                 "failed_symbols": failed_symbols,
                 "failed_rows": [],
                 "failed_batches": [],
@@ -195,6 +197,7 @@ with DAG(
                 "fiscal_date",
                 "year",
                 "quarter",
+                "source_provider",
                 "revenue",
                 "cost_of_goods_sold",
                 "gross_profit",
@@ -230,7 +233,8 @@ with DAG(
                 conn,
                 """
                 INSERT INTO market_data.income_statements
-                    (asset_id, fiscal_date, year, quarter, revenue,
+                    (asset_id, fiscal_date, year, quarter, source_provider,
+                     revenue,
                      cost_of_goods_sold, gross_profit, operating_profit,
                      net_profit_post_tax, selling_expenses, admin_expenses,
                      financial_income, financial_expenses, other_income,
@@ -239,6 +243,7 @@ with DAG(
                 ON CONFLICT (asset_id, fiscal_date) DO UPDATE SET
                     year                = EXCLUDED.year,
                     quarter             = EXCLUDED.quarter,
+                    source_provider     = EXCLUDED.source_provider,
                     revenue             = EXCLUDED.revenue,
                     cost_of_goods_sold  = EXCLUDED.cost_of_goods_sold,
                     gross_profit        = EXCLUDED.gross_profit,
@@ -256,12 +261,19 @@ with DAG(
                 inc_rows,
                 table_name="market_data.income_statements",
             )
+            failed_batch_rows = sum(
+                int(item.get("size") or 0) for item in failed_batches
+            )
+            rows_loaded = max(len(inc_rows) - failed_batch_rows, 0)
             _report_failed_symbols(
                 "load_income_statements (row conversion)", failed_rows
             )
         finally:
             conn.close()
         return {
+            "records_input": len(records),
+            "rows_prepared": len(inc_rows),
+            "rows_loaded": rows_loaded,
             "failed_symbols": failed_symbols,
             "failed_rows": failed_rows,
             "failed_batches": failed_batches,
@@ -302,6 +314,9 @@ with DAG(
         if not records:
             print("No balance sheet data to load.")
             return {
+                "records_input": 0,
+                "rows_prepared": 0,
+                "rows_loaded": 0,
                 "failed_symbols": failed_symbols,
                 "failed_rows": [],
                 "failed_batches": [],
@@ -321,6 +336,7 @@ with DAG(
                 "fiscal_date",
                 "year",
                 "quarter",
+                "source_provider",
                 "total_assets",
                 "total_liabilities",
                 "total_equity",
@@ -352,7 +368,8 @@ with DAG(
                 conn,
                 """
                 INSERT INTO market_data.balance_sheets
-                    (asset_id, fiscal_date, year, quarter, total_assets,
+                    (asset_id, fiscal_date, year, quarter, source_provider,
+                     total_assets,
                      total_liabilities, total_equity, cash_and_equivalents,
                      short_term_assets, long_term_assets, short_term_liabilities,
                      long_term_liabilities)
@@ -360,6 +377,7 @@ with DAG(
                 ON CONFLICT (asset_id, fiscal_date) DO UPDATE SET
                     year                   = EXCLUDED.year,
                     quarter                = EXCLUDED.quarter,
+                    source_provider        = EXCLUDED.source_provider,
                     total_assets           = EXCLUDED.total_assets,
                     total_liabilities      = EXCLUDED.total_liabilities,
                     total_equity           = EXCLUDED.total_equity,
@@ -373,27 +391,97 @@ with DAG(
                 bal_rows,
                 table_name="market_data.balance_sheets",
             )
+            failed_batch_rows = sum(
+                int(item.get("size") or 0) for item in failed_batches
+            )
+            rows_loaded = max(len(bal_rows) - failed_batch_rows, 0)
             _report_failed_symbols("load_balance_sheets (row conversion)", failed_rows)
         finally:
             conn.close()
         return {
+            "records_input": len(records),
+            "rows_prepared": len(bal_rows),
+            "rows_loaded": rows_loaded,
             "failed_symbols": failed_symbols,
             "failed_rows": failed_rows,
             "failed_batches": failed_batches,
         }
 
+    @task(trigger_rule="all_done")
+    def finalize_fundamentals_load(income_summary, balance_summary):
+        summaries = {
+            "income_statements": income_summary or {},
+            "balance_sheets": balance_summary or {},
+        }
+
+        total_records_input = 0
+        total_rows_prepared = 0
+        total_rows_loaded = 0
+        total_failed_symbols = 0
+        total_failed_rows = 0
+        total_failed_batches = 0
+
+        failed_batch_tables = []
+        zero_loaded_tables = []
+
+        for table_name, summary in summaries.items():
+            records_input = int(summary.get("records_input") or 0)
+            rows_prepared = int(summary.get("rows_prepared") or 0)
+            rows_loaded = int(summary.get("rows_loaded") or 0)
+            failed_symbols = summary.get("failed_symbols") or []
+            failed_rows = summary.get("failed_rows") or []
+            failed_batches = summary.get("failed_batches") or []
+
+            total_records_input += records_input
+            total_rows_prepared += rows_prepared
+            total_rows_loaded += rows_loaded
+            total_failed_symbols += len(failed_symbols)
+            total_failed_rows += len(failed_rows)
+            total_failed_batches += len(failed_batches)
+
+            if failed_batches:
+                failed_batch_tables.append(table_name)
+            if rows_prepared > 0 and rows_loaded == 0:
+                zero_loaded_tables.append(table_name)
+
+        print(
+            "fundamentals pipeline summary: "
+            f"records_input={total_records_input}, "
+            f"rows_prepared={total_rows_prepared}, "
+            f"rows_loaded={total_rows_loaded}, "
+            f"failed_symbols={total_failed_symbols}, "
+            f"failed_rows={total_failed_rows}, "
+            f"failed_batches={total_failed_batches}"
+        )
+
+        if failed_batch_tables or zero_loaded_tables:
+            raise RuntimeError(
+                "Fundamentals pipeline completed with write failures: "
+                f"failed_batch_tables={failed_batch_tables}, "
+                f"zero_loaded_tables={zero_loaded_tables}"
+            )
+
+        return {
+            "records_input": total_records_input,
+            "rows_prepared": total_rows_prepared,
+            "rows_loaded": total_rows_loaded,
+            "failed_symbols": total_failed_symbols,
+            "failed_rows": total_failed_rows,
+            "failed_batches": total_failed_batches,
+        }
+
     with TaskGroup("fundamental_pipeline", tooltip="Income Statements") as fund_group:
-        e_inc = extract_income_statements.override(pool=VCI_GRAPHQL_POOL)()
+        e_inc = extract_income_statements.override(pool=FINANCE_PROVIDER_POOL)()
         l_inc = load_income_statements(e_inc)
         e_inc >> l_inc
 
     with TaskGroup(
         "balance_sheet_group", tooltip="Quarterly Balance Sheets"
     ) as balance_group:
-        e_bal = extract_balance_sheets.override(pool=VCI_GRAPHQL_POOL)()
+        e_bal = extract_balance_sheets.override(pool=FINANCE_PROVIDER_POOL)()
         l_bal = load_balance_sheets(e_bal)
         e_bal >> l_bal
 
-    notify_complete = EmptyOperator(task_id="pipeline_complete")
+    final_summary = finalize_fundamentals_load(l_inc, l_bal)
 
-    [fund_group, balance_group] >> notify_complete
+    [fund_group, balance_group] >> final_summary

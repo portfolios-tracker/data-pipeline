@@ -31,7 +31,7 @@ except ModuleNotFoundError as exc:
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
-VCI_GRAPHQL_POOL = "vci_graphql"
+FINANCE_PROVIDER_POOL = os.getenv("FINANCE_PROVIDER_POOL", "kbs_finance")
 NUMERIC_SANITIZE_COLUMNS = (
     "pe_ratio",
     "pb_ratio",
@@ -64,6 +64,7 @@ RATIO_COLUMNS = (
     "fiscal_date",
     "year",
     "quarter",
+    "source_provider",
     "pe_ratio",
     "pb_ratio",
     "ps_ratio",
@@ -92,7 +93,8 @@ RATIO_COLUMNS = (
 )
 RATIOS_UPSERT_SQL = """
 INSERT INTO market_data.financial_ratios
-    (asset_id, fiscal_date, year, quarter, pe_ratio, pb_ratio,
+    (asset_id, fiscal_date, year, quarter, source_provider,
+    pe_ratio, pb_ratio,
      ps_ratio, p_cashflow_ratio, eps, bvps, market_cap, roe,
      roa, roic, financial_leverage, dividend_yield,
      net_profit_margin, debt_to_equity,
@@ -104,6 +106,7 @@ VALUES %s
 ON CONFLICT (asset_id, fiscal_date) DO UPDATE SET
     year              = EXCLUDED.year,
     quarter           = EXCLUDED.quarter,
+    source_provider   = EXCLUDED.source_provider,
     pe_ratio          = EXCLUDED.pe_ratio,
     pb_ratio          = EXCLUDED.pb_ratio,
     ps_ratio          = EXCLUDED.ps_ratio,
@@ -418,17 +421,18 @@ with DAG(
         _report_failed_symbols("finalize_ratio_load (row failures)", failed_rows)
         _report_failed_symbols("finalize_ratio_load (fatal errors)", fatal_errors)
 
-        if fatal_errors:
+        if fatal_errors or failed_batches:
             raise RuntimeError(
-                "Ratios pipeline completed with fatal chunk errors: "
-                f"fatal_errors={len(fatal_errors)}"
+                "Ratios pipeline completed with write/fatal errors: "
+                f"fatal_errors={len(fatal_errors)}, "
+                f"failed_batches={len(failed_batches)}"
             )
 
-        alert_mode = bool(failed_symbols or failed_rows or failed_batches)
+        alert_mode = bool(failed_symbols or failed_rows)
         if alert_mode:
             print(
                 "ratios pipeline alert mode: partial failures detected but DAG will "
-                "complete successfully to avoid replaying already-loaded chunks. "
+                "complete successfully (non-write failures only). "
                 f"failed_symbols={len(failed_symbols)}, "
                 f"failed_rows={len(failed_rows)}, "
                 f"failed_batches={len(failed_batches)}"
@@ -447,7 +451,7 @@ with DAG(
 
     ratio_assets = list_ratio_assets()
     ratio_chunks = chunk_ratio_assets(ratio_assets)
-    chunk_summaries = process_ratio_chunk.override(pool=VCI_GRAPHQL_POOL).expand(
+    chunk_summaries = process_ratio_chunk.override(pool=FINANCE_PROVIDER_POOL).expand(
         chunk_payload=ratio_chunks
     )
     final_summary = finalize_ratio_load(chunk_summaries)

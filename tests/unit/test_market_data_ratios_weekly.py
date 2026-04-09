@@ -1,7 +1,19 @@
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+
+try:
+    import psycopg2  # noqa: F401
+except ModuleNotFoundError:
+    psycopg2_stub = types.ModuleType("psycopg2")
+    psycopg2_stub.connect = MagicMock()
+    psycopg2_stub.extras = types.SimpleNamespace(execute_values=MagicMock())
+    sys.modules["psycopg2"] = psycopg2_stub
+    sys.modules["psycopg2.extras"] = psycopg2_stub.extras
+
 from dags import market_data_ratios_weekly
 
 
@@ -183,17 +195,28 @@ def test_process_ratio_chunk_preserves_large_finite_values_before_upsert(
         }
     )
     row = captured["rows"][0]
+    interest_coverage_idx = market_data_ratios_weekly.RATIO_COLUMNS.index(
+        "interest_coverage"
+    )
+    inventory_turnover_idx = market_data_ratios_weekly.RATIO_COLUMNS.index(
+        "inventory_turnover"
+    )
+    current_ratio_idx = market_data_ratios_weekly.RATIO_COLUMNS.index("current_ratio")
 
     assert result["failed_batches"] == []
     assert result["rows_loaded"] == 1
-    assert row[20] == pytest.approx(100000.0)  # interest_coverage is preserved
-    assert row[22] == pytest.approx(-12000.0)  # inventory_turnover is preserved
-    assert row[18] == pytest.approx(1.5)  # current_ratio remains unchanged
+    assert row[interest_coverage_idx] == pytest.approx(
+        100000.0
+    )  # interest_coverage is preserved
+    assert row[inventory_turnover_idx] == pytest.approx(
+        -12000.0
+    )  # inventory_turnover is preserved
+    assert row[current_ratio_idx] == pytest.approx(1.5)  # current_ratio unchanged
     conn.close.assert_called_once()
 
 
 @pytest.mark.unit
-def test_finalize_ratio_load_returns_alert_after_partial_failures():
+def test_finalize_ratio_load_raises_on_failed_batches():
     chunk_results = [
         {
             "chunk_index": 1,
@@ -219,10 +242,5 @@ def test_finalize_ratio_load_returns_alert_after_partial_failures():
         },
     ]
 
-    result = market_data_ratios_weekly.finalize_ratio_load.function(chunk_results)
-
-    assert result["alert_mode"] is True
-    assert result["failed_symbols"] == 1
-    assert result["failed_rows"] == 0
-    assert result["failed_batches"] == 1
-    assert result["rows_loaded"] == 6
+    with pytest.raises(RuntimeError):
+        market_data_ratios_weekly.finalize_ratio_load.function(chunk_results)

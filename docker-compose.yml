@@ -27,6 +27,8 @@ x-airflow-common: &airflow-common
     SUPABASE_SECRET_OR_SERVICE_ROLE_KEY: "${SUPABASE_SECRET_OR_SERVICE_ROLE_KEY}"
     SUPABASE_DB_URL: "${SUPABASE_DB_URL:-}"
     DATA_PIPELINE_API_KEY: "${DATA_PIPELINE_API_KEY}"
+    AIRFLOW_POOL_VCI_GRAPHQL_SLOTS: "${AIRFLOW_POOL_VCI_GRAPHQL_SLOTS:-8}"
+    AIRFLOW_POOL_KBS_FINANCE_SLOTS: "${AIRFLOW_POOL_KBS_FINANCE_SLOTS:-8}"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
@@ -89,6 +91,7 @@ services:
           --role Admin \
           --email admin@example.com \
           --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" 2>/dev/null || echo "User already exists"
+        su airflow -s /bin/bash -c "/opt/airflow/scripts/bootstrap-airflow-pools.sh" || echo "Pool bootstrap skipped"
         chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
         chmod -R g+rwX /opt/airflow/logs
         find /opt/airflow/logs -type d -exec chmod g+s {} +

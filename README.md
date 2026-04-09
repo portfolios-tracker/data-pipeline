@@ -87,6 +87,9 @@ graph LR
 3. **Access UI**:
    - Airflow Webserver: [http://localhost:8080](http://localhost:8080) (default: `airflow`/`airflow`)
    - Flower (Celery Monitor): [http://localhost:5555](http://localhost:5555)
+   - Required Airflow pools are bootstrapped automatically by the scheduler startup hook:
+     - `vci_graphql`
+     - `kbs_finance`
 
 ### Running Tests
 
@@ -103,3 +106,5 @@ Key environment variables in `.env`:
 - `DATA_PIPELINE_API_KEY`: Internal authentication for NestJS API calls.
 - `SUPABASE_URL` / `SUPABASE_SECRET_OR_SERVICE_ROLE_KEY`: Supabase client access (supabase-py, asset lookups).
 - `SUPABASE_DB_URL`: Direct Postgres connection string for bulk market data writes (psycopg2). Format: `postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres`.
+- `AIRFLOW_POOL_VCI_GRAPHQL_SLOTS`: Slot count for `vci_graphql` pool (default: `8`).
+- `AIRFLOW_POOL_KBS_FINANCE_SLOTS`: Slot count for `kbs_finance` pool (default: `8`).
