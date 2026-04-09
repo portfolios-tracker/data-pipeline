@@ -1,76 +1,39 @@
 import logging
-import os
 import unicodedata
 from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
 
-try:
-    from etl_modules.kbs_provider import (
-        fetch_balance_sheet as fetch_balance_sheet_frame,
-    )
-    from etl_modules.kbs_provider import (
-        fetch_financial_ratios as fetch_financial_ratio_frame,
-    )
-    from etl_modules.kbs_provider import (
-        fetch_income_statement as fetch_income_statement_frame,
-    )
-    from etl_modules.vci_provider import (
-        fetch_company_news,
-    )
-    from etl_modules.vci_provider import (
-        fetch_stock_price as fetch_stock_price_frame,
-    )
-    from etl_modules.vci_provider import (
-        list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
-    )
-    from etl_modules.vietstock_corp_actions import (
-        default_date_window as default_corp_action_date_window,
-    )
-    from etl_modules.vietstock_corp_actions import (
-        fetch_vietstock_corporate_events as fetch_vietstock_corporate_events_frame,
-    )
-    from etl_modules.vietstock_corp_actions import (
-        fetch_vietstock_dividends as fetch_vietstock_dividends_frame,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.kbs_provider import (
-        fetch_balance_sheet as fetch_balance_sheet_frame,
-    )
-    from dags.etl_modules.kbs_provider import (
-        fetch_financial_ratios as fetch_financial_ratio_frame,
-    )
-    from dags.etl_modules.kbs_provider import (
-        fetch_income_statement as fetch_income_statement_frame,
-    )
-    from dags.etl_modules.vci_provider import (
-        fetch_company_news,
-    )
-    from dags.etl_modules.vci_provider import (
-        fetch_stock_price as fetch_stock_price_frame,
-    )
-    from dags.etl_modules.vci_provider import (
-        list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
-    )
-    from dags.etl_modules.vietstock_corp_actions import (
-        default_date_window as default_corp_action_date_window,
-    )
-    from dags.etl_modules.vietstock_corp_actions import (
-        fetch_vietstock_corporate_events as fetch_vietstock_corporate_events_frame,
-    )
-    from dags.etl_modules.vietstock_corp_actions import (
-        fetch_vietstock_dividends as fetch_vietstock_dividends_frame,
-    )
-
-try:
-    from etl_modules.cache import cached_data
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.cache import cached_data
+from dags.etl_modules.cache import cached_data
+from dags.etl_modules.kbs_provider import (
+    fetch_balance_sheet as fetch_balance_sheet_frame,
+)
+from dags.etl_modules.kbs_provider import (
+    fetch_financial_ratios as fetch_financial_ratio_frame,
+)
+from dags.etl_modules.kbs_provider import (
+    fetch_income_statement as fetch_income_statement_frame,
+)
+from dags.etl_modules.settings import get_env
+from dags.etl_modules.vci_provider import (
+    fetch_company_news,
+)
+from dags.etl_modules.vci_provider import (
+    fetch_stock_price as fetch_stock_price_frame,
+)
+from dags.etl_modules.vci_provider import (
+    list_active_vn_stock_tickers as list_active_vn_stock_tickers_frame,
+)
+from dags.etl_modules.vietstock_corp_actions import (
+    default_date_window as default_corp_action_date_window,
+)
+from dags.etl_modules.vietstock_corp_actions import (
+    fetch_vietstock_corporate_events as fetch_vietstock_corporate_events_frame,
+)
+from dags.etl_modules.vietstock_corp_actions import (
+    fetch_vietstock_dividends as fetch_vietstock_dividends_frame,
+)
 
 # ---------------------------------------------------------------------------
 # Fallback ticker list used when Supabase is unreachable during DAG parsing
@@ -124,7 +87,7 @@ def _is_transient_vci_failure(exc: Exception) -> bool:
 def get_active_vn_stock_tickers(
     raise_on_fallback: bool = False,
 ) -> list[dict[str, str]]:
-    db_url = os.getenv("SUPABASE_DB_URL")
+    db_url = get_env("SUPABASE_DB_URL")
     assets = list_active_vn_stock_tickers_frame(
         db_url,
         raise_on_fallback=raise_on_fallback,
@@ -154,7 +117,8 @@ def get_active_vn_stock_tickers(
 
     if raise_on_fallback:
         raise RuntimeError(
-            "market_data.assets query returned zero active VN stock tickers for market=VN and asset_class=STOCK"
+            "market_data.assets query returned zero active VN stock tickers "
+            "for market=VN and asset_class=STOCK"
         )
     return [{"symbol": t, "asset_id": "fallback"} for t in _FALLBACK_VN_TICKERS]
 
@@ -162,6 +126,17 @@ def get_active_vn_stock_tickers(
 def get_active_vn_tickers(raise_on_fallback: bool = False) -> list[dict[str, str]]:
     """Backward-compatible alias for get_active_vn_stock_tickers()."""
     return get_active_vn_stock_tickers(raise_on_fallback=raise_on_fallback)
+
+
+class FetcherFundamentalsProvider:
+    def list_assets(self) -> list[dict[str, str]]:
+        return get_active_vn_stock_tickers(raise_on_fallback=True)
+
+    def fetch_income_statement(self, symbol: str, asset_id: str) -> pd.DataFrame:
+        return fetch_income_stmt(symbol, asset_id)
+
+    def fetch_balance_sheet(self, symbol: str, asset_id: str) -> pd.DataFrame:
+        return fetch_balance_sheet(symbol, asset_id)
 
 
 def clean_decimal_cols(df, cols):

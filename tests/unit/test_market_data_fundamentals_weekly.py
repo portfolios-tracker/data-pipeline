@@ -1,17 +1,4 @@
-import sys
-import types
-from unittest.mock import MagicMock, patch
-
 import pytest
-
-try:
-    import psycopg2  # noqa: F401
-except ModuleNotFoundError:
-    psycopg2_stub = types.ModuleType("psycopg2")
-    psycopg2_stub.connect = MagicMock()
-    psycopg2_stub.extras = types.SimpleNamespace(execute_values=MagicMock())
-    sys.modules["psycopg2"] = psycopg2_stub
-    sys.modules["psycopg2.extras"] = psycopg2_stub.extras
 
 from dags import market_data_fundamentals_weekly
 
@@ -26,7 +13,9 @@ def test_weekly_fundamentals_dag_has_expected_identity_schedule_and_tasks():
         "finalize_fundamentals_load",
     }
 
-    assert market_data_fundamentals_weekly.dag.dag_id == "market_data_fundamentals_weekly"
+    assert (
+        market_data_fundamentals_weekly.dag.dag_id == "market_data_fundamentals_weekly"
+    )
     assert market_data_fundamentals_weekly.dag.schedule == "0 19 * * 0"
     assert expected_extract_load_tasks.issubset(
         set(market_data_fundamentals_weekly.dag.task_ids)
@@ -34,97 +23,146 @@ def test_weekly_fundamentals_dag_has_expected_identity_schedule_and_tasks():
 
 
 @pytest.mark.unit
-def test_chunked_rows_splits_into_expected_batch_sizes():
-    rows = list(range(205))
+def test_extract_income_statements_delegates_to_orchestrator(monkeypatch):
+    expected_payload = {"records": [{"asset_id": "a1"}], "failed_symbols": []}
+    captured = {}
 
-    chunks = list(market_data_fundamentals_weekly._chunked_rows(rows, 100))
+    def _fake_extract(**kwargs):
+        captured.update(kwargs)
+        return expected_payload
 
-    assert [len(chunk) for chunk in chunks] == [100, 100, 5]
+    monkeypatch.setattr(
+        market_data_fundamentals_weekly.fundamentals_orchestrator,
+        "extract_income_statements",
+        _fake_extract,
+    )
+
+    result = market_data_fundamentals_weekly.extract_income_statements.function()
+
+    assert result == expected_payload
+    assert captured["provider"] is market_data_fundamentals_weekly.FUNDAMENTALS_PROVIDER
 
 
 @pytest.mark.unit
-@patch("dags.market_data_fundamentals_weekly.psycopg2.extras.execute_values")
-def test_upsert_rows_in_batches_continues_on_failed_batch(mock_execute_values):
-    conn = MagicMock()
-    conn.__enter__.return_value = conn
-    conn.__exit__.return_value = False
-
-    cursor = MagicMock()
-    cursor.__enter__.return_value = cursor
-    cursor.__exit__.return_value = False
-    conn.cursor.return_value = cursor
-
-    call_count = {"value": 0}
-
-    def _execute(_cur, _query, batch_rows):
-        call_count["value"] += 1
-        if call_count["value"] == 2:
-            raise RuntimeError("temporary DB failure")
-        return batch_rows
-
-    mock_execute_values.side_effect = _execute
-    rows = [(i,) for i in range(250)]
-
-    failed_batches = market_data_fundamentals_weekly._upsert_rows_in_batches(
-        conn,
-        "INSERT INTO any_table VALUES %s",
-        rows,
-        table_name="any_table",
-    )
-
-    assert call_count["value"] == 3
-    assert len(failed_batches) == 1
-    assert failed_batches[0]["batch_index"] == 2
-    assert conn.rollback.call_count == 1
-
-
-@pytest.mark.unit
-def test_unpack_payload_supports_dict_and_list():
-    records, failed = market_data_fundamentals_weekly._unpack_payload(
-        {"records": [{"asset_id": "a1"}], "failed_symbols": [{"symbol": "AAA"}]}
-    )
-    assert records == [{"asset_id": "a1"}]
-    assert failed == [{"symbol": "AAA"}]
-
-    legacy_records, legacy_failed = market_data_fundamentals_weekly._unpack_payload(
-        [{"asset_id": "a2"}]
-    )
-    assert legacy_records == [{"asset_id": "a2"}]
-    assert legacy_failed == []
-
-
-@pytest.mark.unit
-def test_parse_date_value_handles_iso_and_sentinel_values():
-    parsed = market_data_fundamentals_weekly._parse_date_value("2026-04-06")
-    assert parsed.isoformat() == "2026-04-06"
-    assert market_data_fundamentals_weekly._parse_date_value("NaT") is None
-
-
-@pytest.mark.unit
-def test_finalize_fundamentals_load_raises_when_failed_batches_exist():
-    finalizer = getattr(
-        market_data_fundamentals_weekly,
-        "finalize_fundamentals_load",
-        None,
-    )
-    assert finalizer is not None
-
-    income_summary = {
-        "records_input": 8,
-        "rows_prepared": 8,
-        "rows_loaded": 6,
-        "failed_symbols": [],
-        "failed_rows": [],
-        "failed_batches": [{"batch_index": 1, "size": 2, "error": "db timeout"}],
-    }
-    balance_summary = {
-        "records_input": 8,
-        "rows_prepared": 8,
-        "rows_loaded": 8,
+def test_load_income_statements_delegates_to_orchestrator(monkeypatch):
+    payload = {"records": [{"asset_id": "a1"}], "failed_symbols": []}
+    expected_summary = {
+        "records_input": 1,
+        "rows_prepared": 1,
+        "rows_loaded": 1,
         "failed_symbols": [],
         "failed_rows": [],
         "failed_batches": [],
     }
+    captured = {}
 
-    with pytest.raises(RuntimeError):
-        finalizer.function(income_summary, balance_summary)
+    def _fake_load(data, **kwargs):
+        captured["data"] = data
+        captured.update(kwargs)
+        return expected_summary
+
+    monkeypatch.setattr(
+        market_data_fundamentals_weekly.fundamentals_orchestrator,
+        "load_income_statements",
+        _fake_load,
+    )
+
+    result = market_data_fundamentals_weekly.load_income_statements.function(payload)
+
+    assert result == expected_summary
+    assert captured["data"] == payload
+    assert captured["provider"] is market_data_fundamentals_weekly.FUNDAMENTALS_PROVIDER
+    assert (
+        captured["repository"] is market_data_fundamentals_weekly.MARKET_DATA_REPOSITORY
+    )
+    assert captured["db_url"] == market_data_fundamentals_weekly.SUPABASE_DB_URL
+    assert (
+        captured["batch_size"] == market_data_fundamentals_weekly.DB_UPSERT_BATCH_SIZE
+    )
+    assert (
+        captured["upsert_sql"]
+        == market_data_fundamentals_weekly.INCOME_STATEMENTS_UPSERT_SQL
+    )
+    assert (
+        captured["income_columns"]
+        == market_data_fundamentals_weekly.INCOME_STATEMENT_COLUMNS
+    )
+
+
+@pytest.mark.unit
+def test_load_balance_sheets_delegates_to_orchestrator(monkeypatch):
+    payload = {"records": [{"asset_id": "a1"}], "failed_symbols": []}
+    expected_summary = {
+        "records_input": 1,
+        "rows_prepared": 1,
+        "rows_loaded": 1,
+        "failed_symbols": [],
+        "failed_rows": [],
+        "failed_batches": [],
+    }
+    captured = {}
+
+    def _fake_load(data, **kwargs):
+        captured["data"] = data
+        captured.update(kwargs)
+        return expected_summary
+
+    monkeypatch.setattr(
+        market_data_fundamentals_weekly.fundamentals_orchestrator,
+        "load_balance_sheets",
+        _fake_load,
+    )
+
+    result = market_data_fundamentals_weekly.load_balance_sheets.function(payload)
+
+    assert result == expected_summary
+    assert captured["data"] == payload
+    assert captured["provider"] is market_data_fundamentals_weekly.FUNDAMENTALS_PROVIDER
+    assert (
+        captured["repository"] is market_data_fundamentals_weekly.MARKET_DATA_REPOSITORY
+    )
+    assert captured["db_url"] == market_data_fundamentals_weekly.SUPABASE_DB_URL
+    assert (
+        captured["batch_size"] == market_data_fundamentals_weekly.DB_UPSERT_BATCH_SIZE
+    )
+    assert (
+        captured["upsert_sql"]
+        == market_data_fundamentals_weekly.BALANCE_SHEETS_UPSERT_SQL
+    )
+    assert (
+        captured["balance_columns"]
+        == market_data_fundamentals_weekly.BALANCE_SHEET_COLUMNS
+    )
+
+
+@pytest.mark.unit
+def test_finalize_fundamentals_load_delegates_to_orchestrator(monkeypatch):
+    income_summary = {"rows_loaded": 1}
+    balance_summary = {"rows_loaded": 2}
+    expected = {
+        "records_input": 3,
+        "rows_prepared": 3,
+        "rows_loaded": 3,
+        "failed_symbols": 0,
+        "failed_rows": 0,
+        "failed_batches": 0,
+    }
+
+    def _fake_finalize(income, balance):
+        assert income == income_summary
+        assert balance == balance_summary
+        return expected
+
+    monkeypatch.setattr(
+        market_data_fundamentals_weekly.fundamentals_orchestrator,
+        "finalize_fundamentals_load",
+        _fake_finalize,
+    )
+
+    assert (
+        market_data_fundamentals_weekly.finalize_fundamentals_load.function(
+            income_summary,
+            balance_summary,
+        )
+        == expected
+    )

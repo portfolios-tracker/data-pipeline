@@ -10,29 +10,28 @@ Tests cover:
 - summarize_news_with_gemini: AI summary generation
 """
 
+from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
 import responses
-from unittest.mock import patch, Mock, MagicMock
-from datetime import datetime
 
 # Import functions to test
 from dags.etl_modules.notifications import (
-    send_telegram_message,
-    send_success_notification,
-    send_failure_notification,
-    send_telegram_news_summary,
     get_latest_stock_data,
+    send_failure_notification,
+    send_success_notification,
+    send_telegram_message,
+    send_telegram_news_summary,
     summarize_news_with_gemini,
 )
-
 from tests.mocks.api_responses import (
-    mock_telegram_success,
-    mock_telegram_error,
-    mock_gemini_success,
-    get_telegram_url,
     get_gemini_url,
+    get_telegram_url,
+    mock_gemini_success,
+    mock_telegram_error,
+    mock_telegram_success,
 )
-
 
 # ============================================================================
 # Tests for send_telegram_message()
@@ -135,14 +134,14 @@ class TestNotificationCallbacks:
 
     @patch("dags.etl_modules.notifications.send_telegram_message")
     def test_success_callback(self, mock_send, sample_airflow_context):
-        """Test that send_success_notification calls send_telegram_message with SUCCESS."""
+        """send_success_notification delegates with SUCCESS status."""
         send_success_notification(sample_airflow_context)
 
         mock_send.assert_called_once_with(sample_airflow_context, status="SUCCESS")
 
     @patch("dags.etl_modules.notifications.send_telegram_message")
     def test_failure_callback(self, mock_send, sample_airflow_context):
-        """Test that send_failure_notification calls send_telegram_message with FAILED."""
+        """send_failure_notification delegates with FAILED status."""
         send_failure_notification(sample_airflow_context)
 
         mock_send.assert_called_once_with(sample_airflow_context, status="FAILED")
@@ -230,6 +229,19 @@ class TestSendTelegramNewsSummary:
         # Should not raise exception
         send_telegram_news_summary([])
         send_telegram_news_summary(None)
+
+    @patch("dags.etl_modules.notifications.summarize_news_with_gemini")
+    def test_missing_credentials_short_circuits_before_summarization(
+        self,
+        mock_gemini,
+        monkeypatch,
+    ):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+        send_telegram_news_summary([{"ticker": "HPG", "title": "Test"}])
+
+        mock_gemini.assert_not_called()
 
     @responses.activate
     @patch("dags.etl_modules.notifications.summarize_news_with_gemini")
@@ -333,9 +345,7 @@ class TestGetLatestStockData:
         assert "market_data.market_data_financial_ratios" not in executed_sql
 
     @patch("dags.etl_modules.notifications.psycopg2.connect")
-    def test_connection_error_handled(
-        self, mock_connect, mock_environment_variables
-    ):
+    def test_connection_error_handled(self, mock_connect, mock_environment_variables):
         """Test that connection errors are handled gracefully."""
         mock_connect.side_effect = Exception("Connection failed")
 

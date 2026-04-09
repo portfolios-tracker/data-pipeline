@@ -1,9 +1,16 @@
-import os
 import logging
-import requests
 from datetime import datetime
+
 import psycopg2
+import requests
 from dotenv import load_dotenv
+
+from dags.etl_modules.adapters.notification_adapter import (
+    CallableNewsSummaryProvider,
+    TelegramNotificationAdapter,
+)
+from dags.etl_modules.orchestrators import notifications_orchestrator
+from dags.etl_modules.settings import get_env
 
 load_dotenv()
 
@@ -22,7 +29,7 @@ def get_latest_stock_data(tickers):
     if not tickers:
         return {}
 
-    db_url = os.getenv("SUPABASE_DB_URL")
+    db_url = get_env("SUPABASE_DB_URL")
     if not db_url:
         logging.error("SUPABASE_DB_URL is not set; cannot fetch stock context")
         return {}
@@ -65,7 +72,14 @@ def get_latest_stock_data(tickers):
                         END AS return_1m,
                         COALESCE(ta.sector, 'N/A') AS sector,
                         COALESCE(ta.industry, 'N/A') AS industry,
-                        COALESCE(r.pe_ratio, CASE WHEN COALESCE(r.eps, 0) = 0 THEN 0 ELSE (lp.close * 1000) / r.eps END, 0) AS pe_ratio,
+                        COALESCE(
+                            r.pe_ratio,
+                            CASE
+                                WHEN COALESCE(r.eps, 0) = 0 THEN 0
+                                ELSE (lp.close * 1000) / r.eps
+                            END,
+                            0
+                        ) AS pe_ratio,
                         COALESCE(r.roe, 0) AS roe,
                         COALESCE(r.roic, 0) AS roic,
                         COALESCE(r.debt_to_equity, 0) AS debt_to_equity,
@@ -127,9 +141,9 @@ def get_latest_stock_data(tickers):
 
 def summarize_news_with_gemini(news_data):
     """
-    Uses Gemini AI to generate an intelligent summary of the news with current technical data.
+    Use Gemini AI to generate a summary of news with technical context.
     """
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    gemini_api_key = get_env("GEMINI_API_KEY")
 
     if not gemini_api_key:
         logging.warning("Gemini API key not found. Using basic summary.")
@@ -154,11 +168,13 @@ def summarize_news_with_gemini(news_data):
     stock_data = get_latest_stock_data(tickers)
 
     # Create enhanced prompt for Gemini with technical data
-    prompt = f"""You are a financial analyst summarizing Vietnamese stock market news for {datetime.now().strftime("%Y-%m-%d")}.
-
-Here is today's news data with current technical and fundamental indicators:
-
-"""
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    prompt = (
+        "You are a financial analyst summarizing Vietnamese stock market news for "
+        f"{current_date}.\n\n"
+        "Here is today's news data with current technical and fundamental "
+        "indicators:\n\n"
+    )
 
     for ticker, articles in sorted(news_by_ticker.items()):
         prompt += f"\n{ticker}:"
@@ -177,7 +193,10 @@ Here is today's news data with current technical and fundamental indicators:
 
         prompt += "\n  News Articles:\n"
         for i, article in enumerate(articles[:5], 1):
-            prompt += f"  {i}. {article['title']} (Price change at publish: {article['price_change']:.2f}%)\n"
+            prompt += (
+                f"  {i}. {article['title']} "
+                f"(Price change at publish: {article['price_change']:.2f}%)\n"
+            )
 
         if len(articles) > 5:
             prompt += f"  ...and {len(articles) - 5} more articles\n"
@@ -187,13 +206,15 @@ Here is today's news data with current technical and fundamental indicators:
 Please provide:
 1. A brief overall market sentiment (2-3 sentences)
 2. Key highlights for each stock with technical analysis context:
-   - Interpret the news in light of current technical indicators (RSI, MACD, moving averages)
+    - Interpret the news in light of current technical indicators
+      (RSI, MACD, moving averages)
    - Mention if the stock is overbought/oversold, trending up/down
    - Note any divergences between news sentiment and technical signals
 3. Any notable trends or patterns you observe
 4. Brief investment considerations based on the combination of news and technicals
 
-Keep the summary concise, professional, and actionable for investors. Format using simple text, no markdown."""
+Keep the summary concise, professional, and actionable for investors.
+Format using simple text, no markdown."""
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
     headers = {"Content-Type": "application/json", "X-goog-api-key": gemini_api_key}
@@ -226,123 +247,25 @@ def send_telegram_news_summary(news_data):
     """
     Sends a formatted news summary to Telegram with Gemini AI analysis.
     """
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
-        logging.warning("Telegram credentials not found. Skipping news notification.")
-        return
-
-    if not news_data:
-        logging.info("No news data to send.")
-        return
-
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    # Try to get Gemini summary
-    gemini_summary = summarize_news_with_gemini(news_data)
-
-    if gemini_summary:
-        # Send AI-generated summary
-        header = f"📰 *AI Market News Summary - {today}*\n🤖 _Powered by Gemini AI_\n\n"
-        text = header + gemini_summary
-    else:
-        # Fallback to basic summary
-        header = f"📰 *Market News Summary - {today}*\n\n"
-
-        # Group news by ticker
-        news_by_ticker = {}
-        for item in news_data:
-            ticker = item.get("ticker")
-            if ticker not in news_by_ticker:
-                news_by_ticker[ticker] = []
-            news_by_ticker[ticker].append(item)
-
-        message_parts = [header]
-
-        for ticker, articles in sorted(news_by_ticker.items()):
-            message_parts.append(f"*{ticker}* ({len(articles)} articles)")
-
-            # Show up to 3 most recent articles per ticker
-            for i, article in enumerate(articles[:3], 1):
-                title = article.get("title", "No title")[:100]  # Truncate long titles
-                price_change = article.get("price_change_ratio", 0)
-                price_emoji = (
-                    "📈" if price_change > 0 else "📉" if price_change < 0 else "➡️"
-                )
-
-                message_parts.append(
-                    f"{i}. {title}... {price_emoji} {price_change:.2f}%"
-                )
-
-            if len(articles) > 3:
-                message_parts.append(f"   _...and {len(articles) - 3} more_")
-
-            message_parts.append("")  # Empty line between tickers
-
-        text = "\n".join(message_parts)
-
-    # Telegram message limit is 4096 characters
-    if len(text) > 4000:
-        text = text[:3900] + "\n\n_...message truncated_"
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Telegram news summary sent: {len(news_data)} articles")
-    except Exception as e:
-        logging.error(f"Failed to send Telegram news summary: {e}")
+    sender = TelegramNotificationAdapter()
+    summarizer = CallableNewsSummaryProvider(summarize_fn=summarize_news_with_gemini)
+    notifications_orchestrator.send_news_summary_notification(
+        news_data,
+        sender=sender,
+        summarizer=summarizer,
+    )
 
 
 def send_telegram_message(context, status):
     """
     Sends a Telegram notification based on the DAG run status.
     """
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
-        logging.warning("Telegram credentials not found. Skipping notification.")
-        return
-
-    dag_id = context.get("dag").dag_id
-    run_id = context.get("run_id")
-    execution_date = context.get("logical_date") or context.get("execution_date")
-
-    if status == "FAILED":
-        emoji = "🔴"
-        task_instance = context.get("task_instance")
-        task_id = task_instance.task_id if task_instance else "Unknown"
-        exception = context.get("exception")
-        text = (
-            f"{emoji} *DAG Failed*\n"
-            f"DAG: `{dag_id}`\n"
-            f"Task: `{task_id}`\n"
-            f"Run ID: `{run_id}`\n"
-            f"Time: `{execution_date}`\n"
-            f"Error: `{exception}`"
-        )
-    else:
-        emoji = "🟢"
-        text = (
-            f"{emoji} *DAG Success*\n"
-            f"DAG: `{dag_id}`\n"
-            f"Run ID: `{run_id}`\n"
-            f"Time: `{execution_date}`"
-        )
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Telegram notification sent for {dag_id}")
-    except Exception as e:
-        logging.error(f"Failed to send Telegram notification: {e}")
+    sender = TelegramNotificationAdapter()
+    notifications_orchestrator.send_dag_status_notification(
+        context,
+        status,
+        sender=sender,
+    )
 
 
 def send_success_notification(context):

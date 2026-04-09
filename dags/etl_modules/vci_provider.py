@@ -21,19 +21,8 @@ import pandas as pd
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-try:
-    from etl_modules.request_governor import governed_call
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.request_governor import governed_call
-
-try:
-    from etl_modules.cache import get_redis_client
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.cache import get_redis_client
+from dags.etl_modules.cache import get_redis_client
+from dags.etl_modules.request_governor import governed_call
 
 logger = logging.getLogger(__name__)
 
