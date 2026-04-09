@@ -6,12 +6,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-try:
-    from etl_modules.request_governor import governed_call
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.request_governor import governed_call
+from dags.etl_modules.request_governor import governed_call
 
 KBS_FINANCE_INFO_URL = (
     "https://kbbuddywts.kbsec.com.vn/sas/kbsv-stock-data-store/stock/finance-info"

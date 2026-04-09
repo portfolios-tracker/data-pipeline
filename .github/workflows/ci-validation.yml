@@ -1,0 +1,54 @@
+name: CI Validation
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+
+jobs:
+  strict-validate:
+    name: Strict validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Run strict validation gates
+        run: VALIDATE_SCOPE=phased ./scripts/validate.sh
+
+  integration-smoke:
+    name: Integration smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: DAG import smoke tests
+        run: uv run pytest tests/integration/test_dag_import_smoke.py -q -o addopts=''
+
+      - name: Integration regression suite
+        run: uv run pytest tests/integration/test_ingest_company_intelligence_integration.py -q -o addopts=''

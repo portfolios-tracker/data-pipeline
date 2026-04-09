@@ -2,18 +2,19 @@ import functools
 import hashlib
 import json
 import logging
-import os
 from datetime import date, datetime, timedelta
 
 import pandas as pd
 import redis
 
+from dags.etl_modules.settings import get_env, get_env_int
+
 # Configuration
-REDIS_URL = os.getenv("REDIS_URL")
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
+REDIS_URL = get_env("REDIS_URL")
+REDIS_HOST = get_env("REDIS_HOST", "redis")
+REDIS_PORT = get_env_int("REDIS_PORT", 6379)
+REDIS_PASSWORD = get_env("REDIS_PASSWORD")
+REDIS_DB = get_env_int("REDIS_DB", 0)
 
 _REDIS_CLIENT_UNINITIALIZED = object()
 redis_client = _REDIS_CLIENT_UNINITIALIZED
@@ -43,7 +44,7 @@ def get_redis_client():
             client.ping()
             redis_client = client
             logging.info("Connected to Redis")
-        except Exception as e:
+        except (redis.exceptions.RedisError, OSError, ValueError) as e:
             logging.warning(
                 f"Failed to connect to Redis: {e}. Caching will be disabled."
             )
@@ -99,7 +100,7 @@ def _normalize_for_key(value):
     if hasattr(value, "item"):
         try:
             return value.item()
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             pass
 
     return repr(value)
@@ -138,7 +139,7 @@ def _serialize_value(value):
     if hasattr(value, "item"):
         try:
             return value.item()
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             pass
 
     if pd.isna(value):
@@ -211,7 +212,13 @@ def cached_data(ttl_seconds=3600, key_fn=None):
                     logging.debug(f"Cache HIT for {func.__name__}")
                     cached_value = json.loads(cached_bytes.decode("utf-8"))
                     return _deserialize_value(cached_value)
-            except Exception as e:
+            except (
+                redis.exceptions.RedisError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as e:
                 logging.warning(f"Error reading from cache for {func.__name__}: {e}")
 
             result = func(*args, **kwargs)
@@ -230,7 +237,12 @@ def cached_data(ttl_seconds=3600, key_fn=None):
                     ).encode("utf-8")
                     client.setex(key, timedelta(seconds=ttl_seconds), payload)
                     logging.debug(f"Cache SET for {func.__name__}")
-            except Exception as e:
+            except (
+                redis.exceptions.RedisError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as e:
                 logging.warning(f"Error writing to cache for {func.__name__}: {e}")
 
             return result

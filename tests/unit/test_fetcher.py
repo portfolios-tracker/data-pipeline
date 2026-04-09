@@ -16,7 +16,9 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+
 from dags.etl_modules.fetcher import (
+    FetcherFundamentalsProvider,
     clean_decimal_cols,
     fetch_balance_sheet,
     fetch_corporate_events,
@@ -877,3 +879,67 @@ class TestGetActiveVnStockTickers:
             {"symbol": "HPG", "asset_id": "asset-hpg"},
             {"symbol": "VCB", "asset_id": "asset-vcb"},
         ]
+
+
+@pytest.mark.unit
+class TestFetcherFundamentalsProvider:
+    def test_list_assets_delegates_with_raise_on_fallback_true(self, monkeypatch):
+        expected_assets = [{"symbol": "HPG", "asset_id": "asset-hpg"}]
+        captured = {}
+
+        def _fake_get_active_vn_stock_tickers(*, raise_on_fallback=False):
+            captured["raise_on_fallback"] = raise_on_fallback
+            return expected_assets
+
+        monkeypatch.setattr(
+            "dags.etl_modules.fetcher.get_active_vn_stock_tickers",
+            _fake_get_active_vn_stock_tickers,
+        )
+
+        provider = FetcherFundamentalsProvider()
+        result = provider.list_assets()
+
+        assert result == expected_assets
+        assert captured["raise_on_fallback"] is True
+
+    def test_fetch_income_statement_delegates_to_fetcher_function(self, monkeypatch):
+        expected_frame = pd.DataFrame([{"asset_id": "asset-hpg", "revenue": 100.0}])
+        captured = {}
+
+        def _fake_fetch_income_stmt(symbol, asset_id):
+            captured["symbol"] = symbol
+            captured["asset_id"] = asset_id
+            return expected_frame
+
+        monkeypatch.setattr(
+            "dags.etl_modules.fetcher.fetch_income_stmt",
+            _fake_fetch_income_stmt,
+        )
+
+        provider = FetcherFundamentalsProvider()
+        result = provider.fetch_income_statement("HPG", "asset-hpg")
+
+        assert result is expected_frame
+        assert captured == {"symbol": "HPG", "asset_id": "asset-hpg"}
+
+    def test_fetch_balance_sheet_delegates_to_fetcher_function(self, monkeypatch):
+        expected_frame = pd.DataFrame(
+            [{"asset_id": "asset-vcb", "total_assets": 200.0}]
+        )
+        captured = {}
+
+        def _fake_fetch_balance_sheet(symbol, asset_id):
+            captured["symbol"] = symbol
+            captured["asset_id"] = asset_id
+            return expected_frame
+
+        monkeypatch.setattr(
+            "dags.etl_modules.fetcher.fetch_balance_sheet",
+            _fake_fetch_balance_sheet,
+        )
+
+        provider = FetcherFundamentalsProvider()
+        result = provider.fetch_balance_sheet("VCB", "asset-vcb")
+
+        assert result is expected_frame
+        assert captured == {"symbol": "VCB", "asset_id": "asset-vcb"}

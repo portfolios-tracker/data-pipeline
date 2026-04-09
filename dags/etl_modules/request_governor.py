@@ -12,14 +12,10 @@ from threading import Lock
 from typing import Any, Callable, TypeVar
 from urllib.error import HTTPError, URLError
 
+import redis
 import requests
 
-try:
-    from etl_modules.cache import get_redis_client
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.cache import get_redis_client
+from dags.etl_modules.cache import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +198,12 @@ def _acquire_source_slot(source: str, min_interval_seconds: float) -> None:
                 pipe.pexpire(bucket_key, window_ms * 2)
                 pipe.execute()
                 return
-        except Exception:
+        except (
+            redis.exceptions.RedisError,
+            AttributeError,
+            TypeError,
+            ValueError,
+        ):
             _acquire_local_slot(key, min_interval_seconds)
             return
 

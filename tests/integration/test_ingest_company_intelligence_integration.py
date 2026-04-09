@@ -48,25 +48,36 @@ FAKE_EMBEDDING = [0.01] * 768
 class TestFetchCompanyProfilesIntegration:
     """Integration tests for the fetch_company_profiles task."""
 
+    @staticmethod
+    def _stub_active_assets_query(mock_supabase, rows):
+        query = mock_supabase.schema.return_value.table.return_value.select.return_value
+        with_status = query.eq.return_value.eq.return_value.eq.return_value
+        execute = with_status.order.return_value.execute
+        execute.return_value = Mock(data=rows)
+        return query
+
     @patch("dags.ingest_company_intelligence.time.sleep")
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    def test_fetches_profiles_for_active_vn_tickers(self, mock_get_supabase, mock_sleep):
+    def test_fetches_profiles_for_active_vn_tickers(
+        self, mock_get_supabase, mock_sleep
+    ):
         """Full flow: Supabase assets query → vnstock overview → XCom push."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
-            data=[
-                {"symbol": "VNM", "exchange": "HOSE"},
-                {"symbol": "HPG", "exchange": "HOSE"},
-            ]
+        self._stub_active_assets_query(
+            mock_supabase,
+            [
+                {"symbol": "VNM", "exchange": "HOSE", "metadata": {}},
+                {"symbol": "HPG", "exchange": "HOSE", "metadata": {}},
+            ],
         )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        def fake_company_overview(symbol, source):
+        def fake_company_overview(symbol):
             profiles_map = {
                 "VNM": pd.DataFrame(
                     [
@@ -91,15 +102,10 @@ class TestFetchCompanyProfilesIntegration:
             }
             return profiles_map.get(symbol, pd.DataFrame())
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
-
-            def make_company(symbol, source):
-                obj = MagicMock()
-                obj.overview.return_value = fake_company_overview(symbol, source)
-                return obj
-
-            mock_company_cls.side_effect = make_company
-
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview",
+            side_effect=fake_company_overview,
+        ):
             result = fetch_company_profiles(**context)
 
         assert result == 2
@@ -112,43 +118,43 @@ class TestFetchCompanyProfilesIntegration:
 
     @patch("dags.ingest_company_intelligence.time.sleep")
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    def test_handles_vnstock_api_failure_gracefully(self, mock_get_supabase, mock_sleep):
+    def test_handles_vnstock_api_failure_gracefully(
+        self, mock_get_supabase, mock_sleep
+    ):
         """API failures for individual tickers do not abort the pipeline."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(
-            data=[
-                {"symbol": "FAIL", "exchange": "HOSE"},
-                {"symbol": "VNM", "exchange": "HOSE"},
-            ]
+        self._stub_active_assets_query(
+            mock_supabase,
+            [
+                {"symbol": "FAIL", "exchange": "HOSE", "metadata": {}},
+                {"symbol": "VNM", "exchange": "HOSE", "metadata": {}},
+            ],
         )
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company") as mock_company_cls:
+        def maybe_failing_overview(symbol):
+            if symbol == "FAIL":
+                raise ConnectionError("VCI source error")
+            return pd.DataFrame(
+                [
+                    {
+                        "company_profile": "VNM profile",
+                        "icb_name2": "Consumer",
+                        "icb_name3": "Food",
+                        "icb_name4": "Dairy",
+                    }
+                ]
+            )
 
-            def make_company(symbol, source):
-                obj = MagicMock()
-                if symbol == "FAIL":
-                    obj.overview.side_effect = ConnectionError("VCI source error")
-                else:
-                    obj.overview.return_value = pd.DataFrame(
-                        [
-                            {
-                                "company_profile": "VNM profile",
-                                "icb_name2": "Consumer",
-                                "icb_name3": "Food",
-                                "icb_name4": "Dairy",
-                            }
-                        ]
-                    )
-                return obj
-
-            mock_company_cls.side_effect = make_company
-
+        with patch(
+            "dags.ingest_company_intelligence.fetch_company_overview",
+            side_effect=maybe_failing_overview,
+        ):
             result = fetch_company_profiles(**context)
 
         assert result == 1
@@ -157,25 +163,178 @@ class TestFetchCompanyProfilesIntegration:
 
     @patch("dags.ingest_company_intelligence.time.sleep")
     @patch("dags.ingest_company_intelligence.get_supabase_client")
-    def test_correct_supabase_query_filters_vn_stocks(self, mock_get_supabase, mock_sleep):
+    def test_correct_supabase_query_filters_vn_stocks(
+        self, mock_get_supabase, mock_sleep
+    ):
         """Verifies the correct Supabase filters are applied when querying assets."""
         from dags.ingest_company_intelligence import fetch_company_profiles
 
         mock_supabase = MagicMock()
         mock_get_supabase.return_value = mock_supabase
-        builder = mock_supabase.table.return_value.select.return_value
-        builder.eq.return_value.eq.return_value.order.return_value.execute.return_value = Mock(data=[])
+        builder = self._stub_active_assets_query(mock_supabase, [])
 
         mock_ti = MagicMock()
         context = {"ti": mock_ti}
 
-        with patch("dags.ingest_company_intelligence.Company"):
+        with patch("dags.ingest_company_intelligence.fetch_company_overview"):
             fetch_company_profiles(**context)
 
-        eq_calls = builder.eq.call_args_list
-        nested_eq_calls = builder.eq.return_value.eq.call_args_list
-        assert any(c.args == ("asset_class", "STOCK") for c in eq_calls)
-        assert any(c.args == ("market", "VN") for c in nested_eq_calls)
+        builder.eq.assert_called_once_with("asset_class", "STOCK")
+        builder.eq.return_value.eq.assert_called_once_with("market", "VN")
+        builder.eq.return_value.eq.return_value.eq.assert_called_once_with(
+            "status", "active"
+        )
+
+
+@pytest.mark.integration
+class TestFailureModeResilienceIntegration:
+    """Regression tests for outage, partial-failure, and cache-unavailable paths."""
+
+    @patch("dags.ingest_company_intelligence.time.sleep")
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_provider_outage_is_recorded_without_fatal_chunk_failure(
+        self, mock_genai, mock_get_supabase, mock_sleep
+    ):
+        from dags.ingest_company_intelligence import process_company_intelligence_chunk
+
+        mock_genai.Client.return_value = MagicMock()
+        mock_get_supabase.return_value = MagicMock()
+        chunk_payload = {
+            "chunk_index": 1,
+            "tickers": [
+                {"symbol": "AAA", "exchange": "HOSE"},
+                {"symbol": "BBB", "exchange": "HNX"},
+            ],
+        }
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+            with patch(
+                "dags.ingest_company_intelligence.fetch_company_overview",
+                side_effect=ConnectionError("provider outage"),
+            ):
+                summary = process_company_intelligence_chunk.function(chunk_payload)
+
+        assert summary["fatal_error"] is None
+        assert summary["profiles_fetched"] == 0
+        assert summary["rows_upserted"] == 0
+        assert summary["failed_embedding_batches"] == []
+        assert summary["failed_upsert_batches"] == []
+        assert [item["symbol"] for item in summary["failed_tickers"]] == ["AAA", "BBB"]
+
+    @patch("dags.ingest_company_intelligence.time.sleep")
+    @patch("dags.ingest_company_intelligence.get_supabase_client")
+    @patch("dags.ingest_company_intelligence.genai")
+    def test_partial_chunk_failure_sets_alert_mode_but_keeps_finalize_green(
+        self, mock_genai, mock_get_supabase, mock_sleep
+    ):
+        from dags.ingest_company_intelligence import (
+            finalize_company_intelligence,
+            process_company_intelligence_chunk,
+        )
+
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.embeddings = [MagicMock(values=FAKE_EMBEDDING)]
+        mock_client.models.embed_content.return_value = mock_resp
+        mock_genai.Client.return_value = mock_client
+
+        mock_supabase = MagicMock()
+        mock_get_supabase.return_value = mock_supabase
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = (
+            MagicMock()
+        )
+
+        chunk_payload = {
+            "chunk_index": 7,
+            "tickers": [
+                {"symbol": "GOOD", "exchange": "HOSE"},
+                {"symbol": "MISS", "exchange": "HOSE"},
+            ],
+        }
+
+        def mixed_provider(symbol):
+            if symbol == "MISS":
+                return pd.DataFrame()
+            return pd.DataFrame(
+                [
+                    {
+                        "company_profile": "Good profile",
+                        "icb_name2": "Consumer",
+                        "icb_name3": "Food",
+                        "icb_name4": "Dairy",
+                    }
+                ]
+            )
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
+            with patch(
+                "dags.ingest_company_intelligence.fetch_company_overview",
+                side_effect=mixed_provider,
+            ):
+                summary = process_company_intelligence_chunk.function(chunk_payload)
+                final_summary = finalize_company_intelligence.function([summary])
+
+        assert summary["fatal_error"] is None
+        assert summary["rows_upserted"] == 1
+        assert summary["failed_tickers"] == [
+            {"symbol": "MISS", "error": "empty overview"}
+        ]
+        assert final_summary["rows_upserted"] == 1
+        assert final_summary["failed_tickers"] == 1
+        assert final_summary["alert_mode"] is True
+
+    @patch("dags.etl_modules.vci_provider._company_type_code", return_value="CT")
+    @patch("dags.etl_modules.vci_provider._graphql")
+    @patch("dags.etl_modules.vci_provider.get_redis_client")
+    def test_fetch_financial_ratios_survives_cache_unavailable(
+        self, mock_get_redis_client, mock_graphql, _mock_company_type_code
+    ):
+        from dags.etl_modules import vci_provider
+
+        cache_client = MagicMock()
+        cache_client.get.side_effect = RuntimeError("redis unavailable")
+        cache_client.set.side_effect = RuntimeError("redis unavailable")
+        mock_get_redis_client.return_value = cache_client
+
+        def fake_graphql(query, variables=None, *, operation=None):
+            if "ListFinancialRatio" in query:
+                return {
+                    "ListFinancialRatio": [
+                        {
+                            "fieldName": "is_net_sales",
+                            "en_Name": "Net Sales",
+                            "name": "Doanh thu thuần",
+                            "type": "income statement",
+                            "comTypeCode": "CT",
+                            "order": 1,
+                        }
+                    ]
+                }
+            if "CompanyFinancialRatio" in query:
+                return {
+                    "CompanyFinancialRatio": {
+                        "ratio": [
+                            {
+                                "ticker": "HPG",
+                                "yearReport": 2025,
+                                "lengthReport": 4,
+                                "updateDate": "2025-12-31",
+                                "is_net_sales": 1000,
+                            }
+                        ]
+                    }
+                }
+            raise AssertionError(f"Unexpected query: {query}")
+
+        mock_graphql.side_effect = fake_graphql
+
+        frame = vci_provider.fetch_financial_ratios("HPG", period="Q")
+
+        assert not frame.empty
+        assert "Net Sales" in frame.columns
+        assert cache_client.get.called
+        assert cache_client.set.called
 
 
 @pytest.mark.integration
@@ -246,7 +405,7 @@ class TestGenerateAndUpsertEmbeddingsIntegration:
     def test_embedding_content_uses_full_concatenated_text(
         self, mock_genai, mock_get_supabase
     ):
-        """The text sent for embedding includes both company_profile and sector taxonomy."""
+        """Embedding text includes company_profile and sector taxonomy."""
         from dags.ingest_company_intelligence import generate_and_upsert_embeddings
 
         mock_ti = MagicMock()

@@ -4,8 +4,9 @@ The **Data Pipeline** service is the institutional-grade ETL engine of the Portf
 
 ## Repository Scope
 
-- Owns Airflow DAG scheduling and ETL execution.
-- Integrates with the core NestJS API through protected batch endpoints.
+- Data Engineering owns DAG scheduling/execution and pipeline modules.
+- Core API endpoint contracts are co-owned by Core Backend + Data Engineering.
+- Platform Engineering owns Airflow/Redis/Postgres runtime and secrets lifecycle.
 - Writes market and enrichment data into Supabase.
 
 Operational docs:
@@ -13,7 +14,9 @@ Operational docs:
 - [Quick Start](./docs/QUICK-START.md)
 - [Deployment](./docs/DEPLOYMENT.md)
 - [Integrations](./docs/INTEGRATIONS.md)
+- [Architecture](./docs/ARCHITECTURE.md)
 - [DAG Ownership](./docs/DAG-OWNERSHIP.md)
+- [Migration Playbook](./docs/MIGRATION-PLAYBOOK.md)
 - [Troubleshooting](./docs/TROUBLESHOOTING.md)
 
 ## 🏗️ Architecture
@@ -38,10 +41,32 @@ graph LR
 
 ## 📂 Core Components
 
-- `dags/`: Airflow directed acyclic graphs for all workflows.
-- `dags/etl_modules/`: Shared logic for data fetching and notifications.
+- `dags/`: DAG definitions and task orchestration entrypoints.
+- `dags/etl_modules/orchestrators/`: Workflow coordination across providers, transforms, and persistence.
+- `dags/etl_modules/adapters/`: External/system-facing I/O boundaries (providers, notifications, repository adapters).
+- `dags/etl_modules/transformers/`: Pure shaping/normalization logic for payloads and rows.
+- `dags/etl_modules/settings.py`, `dags/etl_modules/errors.py`: Shared configuration and domain-level error contracts.
+
+### Operating Model and Boundaries
+
+- Directional flow is enforced: `DAG modules -> orchestrator -> adapters + transformers`.
+- DAG files should stay thin: schedule + task wiring + orchestrator calls only.
+- Orchestrators own control flow, retries, chunk/finalize behavior, and alert/fatal decisions.
+- Adapters own side effects (API/database/notification calls). Transformers do not import adapters.
+- Shared module imports use `from dags.etl_modules...` (see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)).
+
+## ✅ Test Strategy
+
+- **Unit tests** (`@pytest.mark.unit`): adapters, transformers, orchestrators, and error semantics in isolation.
+  - Run: `./run_tests.sh --unit`
+- **Integration tests** (`@pytest.mark.integration`): DAG import/parse smoke and end-to-end boundary wiring.
+  - Run: `./run_tests.sh --integration`
+- **Failure-mode tests** (primarily unit scope): partial failures, failed batches, and fatal error escalation in finalizers.
+  - Run focused examples: `uv run pytest -k "partial_failures or raises_only_on_fatal_errors"`
 
 ## 🚀 Key Workflows (DAGs)
+
+This table is a subset of primary workflows. For full DAG inventory (including `asset_promotion_check`), see [DAG Ownership](./docs/DAG-OWNERSHIP.md).
 
 | DAG Name                      | Schedule           | Epic / Feature                             | Description                                                                    |
 | :---------------------------- | :----------------- | :----------------------------------------- | :----------------------------------------------------------------------------- |
@@ -96,6 +121,15 @@ graph LR
 ```bash
 ./run_tests.sh
 ```
+
+### Validation Gates
+
+```bash
+./scripts/validate.sh
+```
+
+- Default scope (`VALIDATE_SCOPE=phased`) enforces strict lint/type/test gates on migrated clean-architecture modules and their regression tests.
+- Use `VALIDATE_SCOPE=full ./scripts/validate.sh` to run repo-wide strict validation.
 
 ## ⚙️ Configuration
 

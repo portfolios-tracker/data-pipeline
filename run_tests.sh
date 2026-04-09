@@ -38,6 +38,7 @@ Examples:
     ./run_tests.sh -f tests/unit/test_fetcher.py  # Run specific file
     ./run_tests.sh --docker                     # Run in Docker container
     ./run_tests.sh -v --no-coverage             # Verbose without coverage
+    ./scripts/validate.sh                       # Run format, lint, typing, and tests
 
 EOF
 }
