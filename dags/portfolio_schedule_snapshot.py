@@ -22,18 +22,11 @@ from datetime import datetime, timedelta
 import requests
 from airflow import DAG
 from airflow.sdk import task
-try:
-    from etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
+
+from dags.etl_modules.notifications import (
+    send_failure_notification,
+    send_success_notification,
+)
 
 # Configuration
 API_BASE_URL = os.getenv("NESTJS_API_URL", "http://localhost:3001")
@@ -48,7 +41,9 @@ default_args = {
 with DAG(
     dag_id="portfolio_schedule_snapshot",
     default_args=default_args,
-    description="Capture hourly portfolio snapshots for historical performance tracking",
+    description=(
+        "Capture hourly portfolio snapshots for historical performance tracking"
+    ),
     schedule="@hourly",  # Runs every hour (UTC)
     start_date=datetime(2024, 1, 1),
     catchup=False,

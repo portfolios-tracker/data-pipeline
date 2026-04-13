@@ -18,15 +18,9 @@ from typing import cast
 from airflow import DAG
 from airflow.sdk import task
 from google import genai
-
-try:
-    from etl_modules.vci_provider import fetch_company_overview
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.vci_provider import fetch_company_overview
-
 from supabase import Client, create_client
+
+from dags.etl_modules.vci_provider import fetch_company_overview
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,7 +69,8 @@ def get_supabase_client() -> Client:
     key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
     if not url or not key:
         raise ValueError(
-            "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY environment variable not set"
+            "SUPABASE_URL or SUPABASE_SECRET_OR_SERVICE_ROLE_KEY "
+            "environment variable not set"
         )
     return create_client(url, key)
 
@@ -137,7 +132,8 @@ def _load_active_vn_tickers() -> list[tuple[str, str]]:
 
 def fetch_company_profiles(**context):
     """
-    Task 1: Query active VN tickers from Supabase market_data.assets and fetch company profiles via the VCI provider.
+    Task 1: Query active VN tickers from Supabase market_data.assets,
+    then fetch company profiles via the VCI provider.
 
     - Rate limited: 0.5s sleep between API calls
     - Logs progress every 50 tickers
@@ -195,7 +191,8 @@ def fetch_company_profiles(**context):
 
 def generate_and_upsert_embeddings(**context):
     """
-    Task 2 + 3: Generate embeddings via Gemini text-embedding-004 and upsert to Supabase.
+    Task 2 + 3: Generate embeddings via Gemini text-embedding-004
+    and upsert to Supabase.
 
     - Batches embedding API calls in groups of 100
     - Upserts to Supabase company_embeddings in batches of 100
@@ -241,11 +238,13 @@ def generate_and_upsert_embeddings(**context):
             if len(batch_embeddings) != len(batch_texts):
                 raise ValueError(
                     "Embedding count mismatch for batch "
-                    f"{i // batch_size + 1}: expected {len(batch_texts)}, got {len(batch_embeddings)}"
+                    f"{i // batch_size + 1}: expected {len(batch_texts)}, "
+                    f"got {len(batch_embeddings)}"
                 )
             all_embeddings.extend(batch_embeddings)
             logger.info(
-                f"Generated embeddings batch {i // batch_size + 1}: {len(all_embeddings)}/{len(texts)}"
+                "Generated embeddings batch "
+                f"{i // batch_size + 1}: {len(all_embeddings)}/{len(texts)}"
             )
         except Exception as e:
             logger.error(

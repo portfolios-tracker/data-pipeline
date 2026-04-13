@@ -1,29 +1,20 @@
-from airflow import DAG
-from airflow.sdk import task
+import os
+import re
 from datetime import datetime, timedelta
-from pendulum import timezone
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
-import os
-import re
+from airflow import DAG
+from airflow.sdk import task
+from pendulum import timezone
 
-try:
-    from etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
-    from etl_modules.notifications import (
-        send_success_notification,
-        send_failure_notification,
-        send_telegram_news_summary,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
-    from dags.etl_modules.notifications import (
-        send_success_notification,
-        send_failure_notification,
-        send_telegram_news_summary,
-    )
+from dags.etl_modules.fetcher import fetch_news, get_active_vn_stock_tickers
+from dags.etl_modules.notifications import (
+    send_failure_notification,
+    send_success_notification,
+    send_telegram_news_summary,
+)
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -51,7 +42,8 @@ with DAG(
     @task
     def extract_news():
         news_data = []
-        # get_active_vn_stock_tickers returns list[dict] with {"symbol": "...", "asset_id": "..."}
+        # get_active_vn_stock_tickers returns list[dict] with
+        # {"symbol": "...", "asset_id": "..."}
         tickers_info = get_active_vn_stock_tickers(raise_on_fallback=True)
         print(f"Fetching daily news for {len(tickers_info)} tickers...")
 
@@ -75,14 +67,15 @@ with DAG(
         """Add sentiment score to each news record using Gemini with batching"""
         if not data:
             return []
-            
-        import logging
+
         import json
+        import logging
+
         from google import genai
         from google.genai import errors, types
 
         logger = logging.getLogger("airflow.task")
-        
+
         if not GOOGLE_API_KEY:
             logger.warning("GOOGLE_API_KEY not set. Skipping sentiment scoring.")
             for row in data:
@@ -97,42 +90,48 @@ with DAG(
 
         batch_size = 15
         total_items = len(data)
-        logger.info(f"Scoring sentiment for {total_items} news items in batches of {batch_size}...")
+        logger.info(
+            "Scoring sentiment for "
+            f"{total_items} news items in batches of {batch_size}..."
+        )
 
         for i in range(0, total_items, batch_size):
-            batch = data[i:i + batch_size]
-            
+            batch = data[i : i + batch_size]
+
             # Prepare batch prompt
             items_text = ""
             for idx, row in enumerate(batch):
                 title = row.get("title", "No Title")
                 desc = row.get("description", "")
                 items_text += f"ID: {idx}\nTitle: {title}\nContent: {desc}\n---\n"
-            
+
             prompt = f"""
-            Analyze the sentiment of the following {len(batch)} financial news items for the Vietnamese stock market.
-            For each item, provide a sentiment score between -1.0 (extremely negative) and 1.0 (extremely positive). 
+            Analyze sentiment for the following {len(batch)} financial news items
+            from the Vietnamese stock market.
+            For each item, provide a sentiment score between -1.0
+            (extremely negative) and 1.0 (extremely positive).
             0.0 is neutral.
-            
-            Return the results as a JSON object with a key "scores" containing an array of objects, 
-            each with "id" (the ID provided in the prompt) and "score" (the numeric sentiment score).
-            
+
+            Return results as JSON with key "scores" containing an array.
+            Each item must include "id" (the ID in this prompt)
+            and "score" (numeric sentiment score).
+
             Items:
             {items_text}
             """
-            
+
             try:
                 response = client.models.generate_content(
                     model="gemini-2.0-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                    )
+                    ),
                 )
 
                 try:
-                    # Robust cleaning of response.text to remove potential markdown blocks
-                    raw_text = response.text.strip()
+                    # Clean response.text to remove potential markdown blocks.
+                    raw_text = (response.text or "").strip()
                     if raw_text.startswith("```"):
                         # Extract JSON content from within code blocks
                         match = re.search(r"\{.*\}", raw_text, re.DOTALL)
@@ -141,17 +140,26 @@ with DAG(
 
                     result = json.loads(raw_text)
                     scores_list = result.get("scores", [])
-                    scores_map = {item["id"]: item["score"] for item in scores_list if "id" in item and "score" in item}
+                    scores_map = {
+                        item["id"]: item["score"]
+                        for item in scores_list
+                        if "id" in item and "score" in item
+                    }
 
-                    for idx, row in enumerate(batch):                        # Use string idx as key if JSON conversion made IDs strings
+                    for idx, row in enumerate(
+                        batch
+                    ):  # Use string idx as key if JSON conversion made IDs strings
                         score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
                         row["sentiment_score"] = max(-1.0, min(1.0, float(score)))
                 except (json.JSONDecodeError, ValueError, KeyError) as e:
-                    logger.error(f"Failed to parse Gemini response for batch starting at {i}: {e}")
+                    logger.error(
+                        "Failed to parse Gemini response for batch "
+                        f"starting at {i}: {e}"
+                    )
                     logger.debug(f"Raw response: {response.text}")
                     for row in batch:
                         row["sentiment_score"] = 0.0
-                
+
             except errors.APIError as e:
                 logger.error(f"Gemini API Error (batch starting at {i}): {e}")
                 # Re-raise to let Airflow handle retries or alerting
@@ -159,7 +167,7 @@ with DAG(
             except Exception as e:
                 logger.error(f"Unexpected error scoring batch starting at {i}: {e}")
                 raise
-            
+
         return data
 
     @task

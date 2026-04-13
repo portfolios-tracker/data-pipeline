@@ -25,10 +25,6 @@ Rules:
 ## Import Policy
 
 - Use one import style for shared modules: `from dags.etl_modules...`.
-- Runtime fallback dual imports are not allowed in refactored code.
-  - Disallowed pattern:
-    - `try: from etl_modules...`
-    - `except ModuleNotFoundError: from dags.etl_modules...`
 - **Phased migration note:** a few legacy DAGs still use fallback imports until they are migrated
   (`assets_dimension_etl.py`, `ingest_company_intelligence.py`, `market_data_events_daily.py`,
   `market_news_morning.py`, `portfolio_schedule_snapshot.py`, `refresh_historical_prices.py`,

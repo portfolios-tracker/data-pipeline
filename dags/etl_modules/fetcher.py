@@ -17,7 +17,16 @@ from dags.etl_modules.kbs_provider import (
 )
 from dags.etl_modules.settings import get_env
 from dags.etl_modules.vci_provider import (
+    fetch_balance_sheet as fetch_balance_sheet_frame_vci,
+)
+from dags.etl_modules.vci_provider import (
     fetch_company_news,
+)
+from dags.etl_modules.vci_provider import (
+    fetch_financial_ratios as fetch_financial_ratio_frame_vci,
+)
+from dags.etl_modules.vci_provider import (
+    fetch_income_statement as fetch_income_statement_frame_vci,
 )
 from dags.etl_modules.vci_provider import (
     fetch_stock_price as fetch_stock_price_frame,
@@ -70,6 +79,55 @@ def _is_transient_vci_failure(exc: Exception) -> bool:
     return any(marker in message for marker in _VCI_TRANSIENT_ERROR_MARKERS)
 
 
+def _fetch_finance_with_kbs_fallback(
+    *,
+    symbol: str,
+    dataset_name: str,
+    fetch_vci,
+    fetch_kbs,
+) -> tuple[pd.DataFrame, str]:
+    vci_frame = pd.DataFrame()
+    try:
+        vci_frame = fetch_vci()
+    except Exception as vci_exc:
+        logging.warning(
+            "VCI %s fetch failed for %s, falling back to KBS: %s",
+            dataset_name,
+            symbol,
+            vci_exc,
+        )
+        vci_frame = pd.DataFrame()
+
+    if vci_frame is not None and not vci_frame.empty:
+        return vci_frame, "VCI"
+
+    logging.warning(
+        "VCI %s unavailable for %s, attempting KBS fallback",
+        dataset_name,
+        symbol,
+    )
+    try:
+        kbs_frame = fetch_kbs()
+    except Exception as kbs_exc:
+        logging.warning(
+            "KBS %s fetch failed for %s after VCI fallback: %s",
+            dataset_name,
+            symbol,
+            kbs_exc,
+        )
+        kbs_frame = pd.DataFrame()
+
+    if kbs_frame is not None and not kbs_frame.empty:
+        return kbs_frame, "KBS"
+
+    logging.warning(
+        "Both VCI and KBS %s are unavailable for %s",
+        dataset_name,
+        symbol,
+    )
+    return pd.DataFrame(), "VCI"
+
+
 # Temporary guardrail intentionally disabled.
 # Keep this heuristic for quick rollback if provider metadata regresses.
 #
@@ -103,7 +161,9 @@ def get_active_vn_stock_tickers(
             continue
 
         cleaned = str(symbol).strip().upper()
-        metadata = row.get("metadata") or {}
+        metadata = row.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         symbol_type = str(metadata.get("symbol_type") or "").strip().upper()
         if symbol_type and symbol_type != "STOCK":
             continue
@@ -174,9 +234,6 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     coalesced_series = []
     for column_name in dict.fromkeys(df.columns):
         duplicated = df.loc[:, df.columns == column_name]
-        if isinstance(duplicated, pd.Series):
-            coalesced_series.append(duplicated.rename(column_name))
-            continue
         duplicated_values = duplicated.to_numpy(dtype=object)
         merged_values = []
         for row_values in duplicated_values:
@@ -275,7 +332,12 @@ def fetch_stock_price(symbol, asset_id, start_date, end_date):
 def fetch_financial_ratios(symbol, asset_id):
     logging.info(f"Fetching ratios for {symbol}...")
     try:
-        df = fetch_financial_ratio_frame(symbol, period="Q")
+        df, source_provider = _fetch_finance_with_kbs_fallback(
+            symbol=symbol,
+            dataset_name="financial ratios",
+            fetch_vci=lambda: fetch_financial_ratio_frame_vci(symbol, period="Q"),
+            fetch_kbs=lambda: fetch_financial_ratio_frame(symbol, period="Q"),
+        )
         if df is None or df.empty:
             return pd.DataFrame()
         df = _coalesce_duplicate_columns(df)
@@ -350,10 +412,9 @@ def fetch_financial_ratios(symbol, asset_id):
             )
 
         revenue_col = get_col("Revenue")
-        revenue_series = (
-            pd.to_numeric(df[revenue_col], errors="coerce")
-            if revenue_col
-            else pd.Series(np.nan, index=df.index)
+        revenue_series = pd.Series(
+            pd.to_numeric(df[revenue_col], errors="coerce") if revenue_col else np.nan,
+            index=df.index,
         )
 
         operating_profit_col = get_col("Operating Profit/Loss")
@@ -389,9 +450,11 @@ def fetch_financial_ratios(symbol, asset_id):
             receivable_series = pd.to_numeric(
                 df[accounts_receivable_col], errors="coerce"
             )
-            out_df["receivable_turnover"] = revenue_series.divide(
-                receivable_series.replace(0, np.nan)
-            )
+            receivable_denominator = pd.Series(
+                receivable_series,
+                index=df.index,
+            ).where(pd.Series(receivable_series, index=df.index) != 0, np.nan)
+            out_df["receivable_turnover"] = revenue_series / receivable_denominator
 
         operating_cashflow_col = get_col(
             "Net cash inflows/outflows from operating activities"
@@ -423,7 +486,7 @@ def fetch_financial_ratios(symbol, asset_id):
         out_df["fiscal_date"] = out_df.apply(get_quarter_end, axis=1)
         out_df["ticker"] = symbol
         out_df["asset_id"] = asset_id
-        out_df["source_provider"] = _FINANCE_SOURCE_PROVIDER
+        out_df["source_provider"] = source_provider
         out_df = clean_decimal_cols_nullable(out_df, list(metric_aliases.keys()))
 
         return out_df
@@ -451,7 +514,12 @@ def fetch_income_stmt(symbol, asset_id):
     Fetches income statement.
     """
     try:
-        df = fetch_income_statement_frame(symbol, period="Q")
+        df, source_provider = _fetch_finance_with_kbs_fallback(
+            symbol=symbol,
+            dataset_name="income statement",
+            fetch_vci=lambda: fetch_income_statement_frame_vci(symbol, period="Q"),
+            fetch_kbs=lambda: fetch_income_statement_frame(symbol, period="Q"),
+        )
 
         if df is None or df.empty:
             return pd.DataFrame()
@@ -535,7 +603,7 @@ def fetch_income_stmt(symbol, asset_id):
 
         df_final["ticker"] = symbol
         df_final["asset_id"] = asset_id
-        df_final["source_provider"] = _FINANCE_SOURCE_PROVIDER
+        df_final["source_provider"] = source_provider
 
         # Select Final Columns
         final_cols = [
@@ -568,7 +636,12 @@ def fetch_income_stmt(symbol, asset_id):
 )  # 24 hours
 def fetch_balance_sheet(symbol, asset_id):
     try:
-        df = fetch_balance_sheet_frame(symbol, period="Q")
+        df, source_provider = _fetch_finance_with_kbs_fallback(
+            symbol=symbol,
+            dataset_name="balance sheet",
+            fetch_vci=lambda: fetch_balance_sheet_frame_vci(symbol, period="Q"),
+            fetch_kbs=lambda: fetch_balance_sheet_frame(symbol, period="Q"),
+        )
 
         if df is None or df.empty:
             return pd.DataFrame()
@@ -700,7 +773,7 @@ def fetch_balance_sheet(symbol, asset_id):
 
         df_final = clean_decimal_cols_nullable(df_final, required_metrics)
         df_final["asset_id"] = asset_id
-        df_final["source_provider"] = _FINANCE_SOURCE_PROVIDER
+        df_final["source_provider"] = source_provider
 
         final_cols = [
             "asset_id",
@@ -898,8 +971,13 @@ def fetch_news(symbol, asset_id):
         if "close_price" in df.columns and "price_at_publish" not in df.columns:
             df["price_at_publish"] = pd.to_numeric(df["close_price"], errors="coerce")
         if "reference_price" in df.columns and "price_change" not in df.columns:
+            publish_price_series = (
+                pd.to_numeric(df["price_at_publish"], errors="coerce")
+                if "price_at_publish" in df.columns
+                else pd.Series(np.nan, index=df.index)
+            )
             df["price_change"] = pd.to_numeric(
-                df.get("price_at_publish"), errors="coerce"
+                publish_price_series, errors="coerce"
             ) - pd.to_numeric(df["reference_price"], errors="coerce")
         if (
             "percent_price_change" in df.columns

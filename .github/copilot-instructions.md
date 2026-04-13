@@ -3,11 +3,13 @@
 ## Build, Run, and Test Commands
 
 ### Build / run stack
+
 - Start local stack: `docker compose up -d`
 - Start stack via Make target: `make airflow-data-up`
 - Rebuild + recreate Airflow services after DAG/dependency/config changes: `make airflow-refresh`
 
 ### Test
+
 - Full suite (recommended wrapper): `./run_tests.sh`
 - Full suite (direct): `uv run pytest`
 - Single test file: `./run_tests.sh -f tests/unit/test_fetcher.py`
@@ -16,6 +18,7 @@
 - Pattern targeting for failures: `uv run pytest -k <pattern>`
 
 ### Lint
+
 - No dedicated lint command/target is defined in this repository (`Makefile` and `pyproject.toml` do not define one). Do not invent new lint tooling for routine edits.
 
 ## High-Level Architecture
@@ -30,10 +33,6 @@
 
 ## Key Repository Conventions
 
-- **Import compatibility pattern for DAG/runtime/test contexts:** modules commonly use:
-  - `try: from etl_modules...`
-  - `except ModuleNotFoundError: from dags.etl_modules...`
-  Preserve this pattern when adding shared modules used both inside Airflow runtime and tests.
 - **Test import style:** tests import shared helpers via `dags.etl_modules.*` paths (not ad-hoc `sys.path` hacks in normal test code).
 - **Ticker universe filtering convention:** VN equity pipelines query active assets as `asset_class='STOCK'`, `market='VN'`, `status='active'`, and additionally filter out non-stock `metadata.symbol_type`.
 - **Failure semantics in EOD loaders:** chunk tasks collect `failed_symbols` / row errors / failed batches; finalizer logs alert mode for partial failures but only hard-fails on fatal chunk errors to avoid replaying already-loaded chunks.

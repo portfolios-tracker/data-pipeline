@@ -9,28 +9,15 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import task
 from pendulum import timezone
 
-try:
-    from etl_modules.fetcher import fetch_stock_price
-    from etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
-    from etl_modules.refresh_historical_trigger import (
-        ensure_corporate_events_table_exists,
-        fetch_tickers_for_refresh,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.fetcher import fetch_stock_price
-    from dags.etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
-    from dags.etl_modules.refresh_historical_trigger import (
-        ensure_corporate_events_table_exists,
-        fetch_tickers_for_refresh,
-    )
+from dags.etl_modules.fetcher import fetch_stock_price
+from dags.etl_modules.notifications import (
+    send_failure_notification,
+    send_success_notification,
+)
+from dags.etl_modules.refresh_historical_trigger import (
+    ensure_corporate_events_table_exists,
+    fetch_tickers_for_refresh,
+)
 
 # CONFIG
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
@@ -49,7 +36,10 @@ default_args = {
 with DAG(
     "refresh_historical_prices",
     default_args=default_args,
-    description="Refreshes full historical prices (OHLCV) when new corporate events are detected",
+    description=(
+        "Refreshes full historical prices (OHLCV) when new corporate "
+        "events are detected"
+    ),
     schedule="30 11 * * *",  # 18:30 VN time (UTC+7)
     start_date=datetime(2025, 1, 1, tzinfo=timezone("UTC")),
     catchup=False,
@@ -92,7 +82,8 @@ with DAG(
         start_date = (datetime.today() - timedelta(days=365 * 6)).strftime("%Y-%m-%d")
         symbols = [asset.get("symbol") for asset in assets if asset.get("symbol")]
         print(
-            f"Fetching 6-year history ({start_date} to {end_date}) for symbols: {symbols}"
+            "Fetching 6-year history "
+            f"({start_date} to {end_date}) for symbols: {symbols}"
         )
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
@@ -139,7 +130,10 @@ with DAG(
                             cur,
                             """
                             INSERT INTO market_data.prices
-                                (trading_date, open, high, low, close, volume, asset_id, source)
+                                (
+                                    trading_date, open, high, low, close,
+                                    volume, asset_id, source
+                                )
                             VALUES %s
                             ON CONFLICT (asset_id, trading_date) DO UPDATE SET
                                 open          = EXCLUDED.open,
@@ -158,6 +152,6 @@ with DAG(
 
     # Define execution graph
     tickers_to_process = get_unprocessed_tickers()
-    refresh_task = refresh_ticker_history(tickers_to_process)
+    refresh_task = refresh_ticker_history(tickers_to_process)  # type: ignore[arg-type]
 
-    start >> tickers_to_process >> refresh_task >> end
+    _ = start >> tickers_to_process >> refresh_task >> end

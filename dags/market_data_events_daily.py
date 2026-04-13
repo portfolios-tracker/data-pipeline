@@ -9,26 +9,14 @@ from airflow import DAG
 from airflow.sdk import task
 from pendulum import timezone
 
-try:
-    from etl_modules.fetcher import (
-        fetch_corporate_events,
-        get_active_vn_stock_tickers,
-    )
-    from etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.fetcher import (
-        fetch_corporate_events,
-        get_active_vn_stock_tickers,
-    )
-    from dags.etl_modules.notifications import (
-        send_failure_notification,
-        send_success_notification,
-    )
+from dags.etl_modules.fetcher import (
+    fetch_corporate_events,
+    get_active_vn_stock_tickers,
+)
+from dags.etl_modules.notifications import (
+    send_failure_notification,
+    send_success_notification,
+)
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
@@ -330,7 +318,8 @@ with DAG(
 
         print(
             "events pipeline summary: "
-            f"chunks={len(results)}, assets={total_assets}, extracted={total_extracted}, "
+            f"chunks={len(results)}, assets={total_assets}, "
+            f"extracted={total_extracted}, "
             f"loaded={total_loaded}, failed_symbols={len(failed_symbols)}, "
             f"failed_rows={len(failed_rows)}, failed_batches={len(failed_batches)}, "
             f"fatal_errors={len(fatal_errors)}"

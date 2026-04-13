@@ -9,12 +9,7 @@ from typing import Any, Iterable
 import pandas as pd
 import requests
 
-try:
-    from etl_modules.request_governor import governed_call
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.request_governor import governed_call
+from dags.etl_modules.request_governor import governed_call
 
 BASE_URL = "https://finance.vietstock.vn"
 EVENTS_PAGE_PATH = "/lich-su-kien.htm"
@@ -43,7 +38,9 @@ _BROWSER_HEADERS = {
 def _extract_token(html: str) -> str:
     match = _TOKEN_PATTERN.search(html or "")
     if not match:
-        raise RuntimeError("Could not extract __RequestVerificationToken from page HTML")
+        raise RuntimeError(
+            "Could not extract __RequestVerificationToken from page HTML"
+        )
     return match.group(1)
 
 
@@ -87,7 +84,7 @@ def _normalize_rows(
     normalized: list[dict[str, Any]] = []
     for row in rows:
         article_id = row.get("ArticleID")
-        detail = article_details.get(int(article_id)) if article_id else {}
+        detail = article_details.get(int(article_id), {}) if article_id else {}
         normalized.append(
             {
                 "event_id": row.get("EventID"),
@@ -122,7 +119,11 @@ def _normalize_rows(
 
 
 def _parse_channel_name_map(payload: Any) -> dict[int, str]:
-    if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
+    if (
+        not isinstance(payload, list)
+        or len(payload) < 2
+        or not isinstance(payload[1], list)
+    ):
         return {}
     mapping: dict[int, str] = {}
     for item in payload[1]:
@@ -131,7 +132,9 @@ def _parse_channel_name_map(payload: Any) -> dict[int, str]:
         channel_id = item.get("ChannelID")
         if channel_id is None:
             continue
-        mapping[int(channel_id)] = item.get("NameEn") or item.get("Name") or str(channel_id)
+        mapping[int(channel_id)] = (
+            item.get("NameEn") or item.get("Name") or str(channel_id)
+        )
     return mapping
 
 
@@ -147,7 +150,11 @@ def _request_headers(*, page_url: str) -> dict[str, str]:
 
 
 def _extract_total_pages(payload: Any, page_size: int) -> int | None:
-    if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
+    if (
+        not isinstance(payload, list)
+        or len(payload) < 2
+        or not isinstance(payload[1], list)
+    ):
         return None
     if not payload[1]:
         return None
@@ -175,7 +182,9 @@ def _governed_request(
         if method.upper() == "GET":
             response = session.get(url, headers=headers, timeout=timeout)
         else:
-            response = session.post(url, data=data or {}, headers=headers, timeout=timeout)
+            response = session.post(
+                url, data=data or {}, headers=headers, timeout=timeout
+            )
         response.raise_for_status()
         return response
 
@@ -239,14 +248,19 @@ def _build_dividends_frame(actions: pd.DataFrame) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for _, row in dividend_actions.iterrows():
         percent = _parse_rate_to_percentage(row.get("rate"))
-        channel_id = int(row.get("channel_id"))
+        raw_channel_id = row.get("channel_id")
+        if raw_channel_id is None:
+            continue
+        channel_id = int(raw_channel_id)
         exercise_date = row.get("gdkhq_date") or row.get("ndkcc_date")
         cash_percentage = percent if channel_id == 13 else 0.0
         stock_percentage = percent if channel_id in (14, 15) else 0.0
         records.append(
             {
                 "exercise_date": exercise_date,
-                "cash_year": exercise_date.year if isinstance(exercise_date, date) else 0,
+                "cash_year": exercise_date.year
+                if isinstance(exercise_date, date)
+                else 0,
                 "cash_dividend_percentage": cash_percentage,
                 "stock_dividend_percentage": stock_percentage,
                 "issue_method": row.get("channel_name"),
@@ -267,7 +281,9 @@ def _build_corporate_events_frame(actions: pd.DataFrame) -> pd.DataFrame:
             "public_date": actions["ndkcc_date"],
             "exright_date": actions["gdkhq_date"],
             "event_title": actions["title"],
-            "event_type": actions["channel_name"].fillna(actions["channel_id"].astype(str)),
+            "event_type": actions["channel_name"].fillna(
+                actions["channel_id"].astype(str)
+            ),
             "event_description": actions["note"].fillna(actions["content"]),
         }
     )
@@ -312,7 +328,9 @@ def fetch_vietstock_corporate_actions(
         headers=headers,
         data={"id": str(event_type_id)},
     )
-    channel_name_map = _parse_channel_name_map(_safe_json_loads(event_type_response.text))
+    channel_name_map = _parse_channel_name_map(
+        _safe_json_loads(event_type_response.text)
+    )
 
     all_rows: list[dict[str, Any]] = []
     article_cache: dict[int, dict[str, Any]] = {}
@@ -343,7 +361,11 @@ def fetch_vietstock_corporate_actions(
             parsed = _safe_json_loads(response.text)
             if not parsed:
                 break
-            if not isinstance(parsed, list) or not parsed or not isinstance(parsed[0], list):
+            if (
+                not isinstance(parsed, list)
+                or not parsed
+                or not isinstance(parsed[0], list)
+            ):
                 raise RuntimeError("Unexpected eventstypedata payload structure")
 
             page_rows: list[dict[str, Any]] = parsed[0]

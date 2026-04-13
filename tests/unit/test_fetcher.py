@@ -250,10 +250,10 @@ class TestFetchStockPrice:
 class TestFetchFinancialRatios:
     """Test suite for fetch_financial_ratios function."""
 
-    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
-    def test_successful_fetch_returns_dataframe(self, mock_ratio_frame):
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
+    def test_successful_fetch_returns_dataframe(self, mock_ratio_frame_vci):
         """Test successful ratio fetch returns properly formatted DataFrame."""
-        mock_ratio_frame.return_value = pd.DataFrame(
+        mock_ratio_frame_vci.return_value = pd.DataFrame(
             {
                 "yearReport": [2024, 2024],
                 "lengthReport": [4, 3],
@@ -272,19 +272,23 @@ class TestFetchFinancialRatios:
         assert "fiscal_date" in result.columns
         assert result["ticker"].iloc[0] == "HPG"
 
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
     @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
-    def test_empty_response_returns_empty_dataframe(self, mock_ratio_frame):
+    def test_empty_response_returns_empty_dataframe(
+        self, mock_ratio_frame_kbs, mock_ratio_frame_vci
+    ):
         """Test that empty response returns empty DataFrame."""
-        mock_ratio_frame.return_value = pd.DataFrame()
+        mock_ratio_frame_vci.return_value = pd.DataFrame()
+        mock_ratio_frame_kbs.return_value = pd.DataFrame()
 
         result = fetch_financial_ratios("INVALID", "dummy_asset_id")
 
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
-    def test_column_mapping_applied(self, mock_ratio_frame):
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
+    def test_column_mapping_applied(self, mock_ratio_frame_vci):
         """Test that Vietnamese column names are mapped to English."""
-        mock_ratio_frame.return_value = pd.DataFrame(
+        mock_ratio_frame_vci.return_value = pd.DataFrame(
             {
                 "yearReport": [2024],
                 "lengthReport": [4],
@@ -298,11 +302,11 @@ class TestFetchFinancialRatios:
         assert "pe_ratio" in result.columns
         assert "roe" in result.columns
 
-    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
     def test_alias_and_derived_metric_mapping_populates_extended_fields(
-        self, mock_ratio_frame
+        self, mock_ratio_frame_vci
     ):
-        mock_ratio_frame.return_value = pd.DataFrame(
+        mock_ratio_frame_vci.return_value = pd.DataFrame(
             {
                 "yearReport": [2025],
                 "lengthReport": [4],
@@ -325,9 +329,9 @@ class TestFetchFinancialRatios:
         assert result["receivable_turnover"].iloc[0] == pytest.approx(4.0)
         assert result["free_cash_flow"].iloc[0] == pytest.approx(150.0)
 
-    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
-    def test_duplicate_ratio_columns_are_coalesced(self, mock_ratio_frame):
-        mock_ratio_frame.return_value = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
+    def test_duplicate_ratio_columns_are_coalesced(self, mock_ratio_frame_vci):
+        mock_ratio_frame_vci.return_value = pd.DataFrame(
             [[2025, 4, 12.5, 13.0, 1.3, 0.18]],
             columns=["yearReport", "lengthReport", "P/E", "P/E", "P/B", "ROE (%)"],
         )
@@ -337,6 +341,30 @@ class TestFetchFinancialRatios:
         assert not result.empty
         assert result["pe_ratio"].iloc[0] == pytest.approx(12.5)
         assert result["pb_ratio"].iloc[0] == pytest.approx(1.3)
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame")
+    @patch("dags.etl_modules.fetcher.fetch_financial_ratio_frame_vci")
+    def test_ratios_fall_back_to_kbs_when_vci_empty(
+        self,
+        mock_ratio_vci,
+        mock_ratio_kbs,
+        _mock_get_redis_client,
+    ):
+        mock_ratio_vci.return_value = pd.DataFrame()
+        mock_ratio_kbs.return_value = pd.DataFrame(
+            {
+                "yearReport": [2024],
+                "lengthReport": [4],
+                "P/E": [11.2],
+            }
+        )
+
+        result = fetch_financial_ratios("HPG", "dummy_asset_id")
+
+        assert not result.empty
+        assert result["source_provider"].iloc[0] == "KBS"
+        assert result["pe_ratio"].iloc[0] == pytest.approx(11.2)
 
 
 # ============================================================================
@@ -374,9 +402,9 @@ def test_fetch_news_placeholder():
 class TestFetchIncomeStmt:
     """Unit tests for fetch_income_stmt function."""
 
-    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
-    def test_income_stmt_success(self, mock_income_frame):
-        mock_income_frame.return_value = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
+    def test_income_stmt_success(self, mock_income_frame_vci):
+        mock_income_frame_vci.return_value = pd.DataFrame(
             {
                 "Net Sales": [5_000_000_000_000],
                 "Cost of Sales": [3_500_000_000_000],
@@ -407,13 +435,13 @@ class TestFetchIncomeStmt:
         ).issubset(result.columns)
         assert result["ticker"].iloc[0] == "HPG"
         assert result["fiscal_date"].iloc[0] == "2024-12-31"
-        assert result["source_provider"].iloc[0] == "KBS"
+        assert result["source_provider"].iloc[0] == "VCI"
         # Values preserved and cleaned
         assert result["revenue"].iloc[0] == 5_000_000_000_000
 
-    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
-    def test_income_stmt_handles_missing_columns(self, mock_income_frame):
-        mock_income_frame.return_value = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
+    def test_income_stmt_handles_missing_columns(self, mock_income_frame_vci):
+        mock_income_frame_vci.return_value = pd.DataFrame(
             {
                 "Net Sales": [5_000_000_000_000],
                 "yearReport": [2024],
@@ -428,17 +456,21 @@ class TestFetchIncomeStmt:
         assert pd.isna(result["net_profit_post_tax"].iloc[0])
 
     @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
-    def test_income_stmt_empty_dataframe(self, mock_income_frame):
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
+    def test_income_stmt_empty_dataframe(
+        self, mock_income_frame_vci, mock_income_frame
+    ):
+        mock_income_frame_vci.return_value = pd.DataFrame()
         mock_income_frame.return_value = pd.DataFrame()
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
         assert result.empty
 
-    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
     def test_income_stmt_problematic_fields_remain_null_when_missing(
-        self, mock_income_frame
+        self, mock_income_frame_vci
     ):
-        mock_income_frame.return_value = pd.DataFrame(
+        mock_income_frame_vci.return_value = pd.DataFrame(
             {
                 "Net Sales": [3_000_000_000],
                 "Gross Profit": [800_000_000],
@@ -460,9 +492,11 @@ class TestFetchIncomeStmt:
         ]:
             assert pd.isna(result[col].iloc[0])
 
-    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
-    def test_income_stmt_coalesces_duplicate_mapped_columns(self, mock_income_frame):
-        mock_income_frame.return_value = pd.DataFrame(
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
+    def test_income_stmt_coalesces_duplicate_mapped_columns(
+        self, mock_income_frame_vci
+    ):
+        mock_income_frame_vci.return_value = pd.DataFrame(
             {
                 "Net Sales": [1000],
                 "Selling Expense": [None],
@@ -480,25 +514,52 @@ class TestFetchIncomeStmt:
     @patch("dags.etl_modules.fetcher.logging.error")
     @patch("dags.etl_modules.fetcher.logging.warning")
     @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
     def test_income_stmt_transient_vci_failures_log_warning(
         self,
+        mock_income_frame_vci,
         mock_income_frame,
         mock_warning,
         mock_error,
     ):
-        mock_income_frame.side_effect = RuntimeError(
+        mock_income_frame_vci.side_effect = RuntimeError(
             "Failed to reach https://trading.vietcap.com.vn/data-mt/graphql: "
             "<urlopen error [SSL: SSLV3_ALERT_CERTIFICATE_UNKNOWN] certificate unknown>"
         )
+        mock_income_frame.side_effect = RuntimeError("KBS fallback also failed")
 
         result = fetch_income_stmt("HPG", "dummy_asset_id")
 
         assert result.empty
         assert any(
-            "Transient finance source failure fetching income stmt" in str(call.args[0])
+            str(call.args[0]).startswith("VCI %s fetch failed")
             for call in mock_warning.call_args_list
         )
         mock_error.assert_not_called()
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame")
+    @patch("dags.etl_modules.fetcher.fetch_income_statement_frame_vci")
+    def test_income_stmt_falls_back_to_kbs_when_vci_empty(
+        self,
+        mock_income_vci,
+        mock_income_kbs,
+        _mock_get_redis_client,
+    ):
+        mock_income_vci.return_value = pd.DataFrame()
+        mock_income_kbs.return_value = pd.DataFrame(
+            {
+                "Net Sales": [2_000_000],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_income_stmt("HPG", "dummy_asset_id")
+
+        assert not result.empty
+        assert result["source_provider"].iloc[0] == "KBS"
+        assert result["revenue"].iloc[0] == 2_000_000
 
 
 @pytest.mark.unit
@@ -506,11 +567,11 @@ class TestFetchBalanceSheet:
     """Unit tests for fetch_balance_sheet function."""
 
     @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
-    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame_vci")
     def test_balance_sheet_maps_vietnamese_labels(
-        self, mock_balance_sheet_frame, _mock_get_redis_client
+        self, mock_balance_sheet_frame_vci, _mock_get_redis_client
     ):
-        mock_balance_sheet_frame.return_value = pd.DataFrame(
+        mock_balance_sheet_frame_vci.return_value = pd.DataFrame(
             {
                 "Tổng tài sản": [1_000_000],
                 "Tổng nợ phải trả": [400_000],
@@ -541,32 +602,34 @@ class TestFetchBalanceSheet:
     @patch("dags.etl_modules.fetcher.logging.error")
     @patch("dags.etl_modules.fetcher.logging.warning")
     @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame_vci")
     def test_balance_sheet_transient_vci_failures_log_warning(
         self,
+        mock_balance_sheet_frame_vci,
         mock_balance_sheet_frame,
         mock_warning,
         mock_error,
     ):
-        mock_balance_sheet_frame.side_effect = RuntimeError(
+        mock_balance_sheet_frame_vci.side_effect = RuntimeError(
             "HTTP 502 from https://trading.vietcap.com.vn/data-mt/graphql: bad gateway"
         )
+        mock_balance_sheet_frame.side_effect = RuntimeError("KBS fallback also failed")
 
         result = fetch_balance_sheet("HPG", "asset-hpg")
 
         assert result.empty
         assert any(
-            "Transient finance source failure fetching balance sheet"
-            in str(call.args[0])
+            str(call.args[0]).startswith("VCI %s fetch failed")
             for call in mock_warning.call_args_list
         )
         mock_error.assert_not_called()
 
     @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
-    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame_vci")
     def test_balance_sheet_maps_case_insensitive_labels(
-        self, mock_balance_sheet_frame, _mock_get_redis_client
+        self, mock_balance_sheet_frame_vci, _mock_get_redis_client
     ):
-        mock_balance_sheet_frame.return_value = pd.DataFrame(
+        mock_balance_sheet_frame_vci.return_value = pd.DataFrame(
             {
                 "total assets": [2_000_000],
                 "total liabilities": [800_000],
@@ -590,11 +653,11 @@ class TestFetchBalanceSheet:
         assert result["cash_and_equivalents"].iloc[0] == 200_000
 
     @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
-    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame_vci")
     def test_balance_sheet_maps_vci_uppercase_and_derives_missing_totals(
-        self, mock_balance_sheet_frame, _mock_get_redis_client
+        self, mock_balance_sheet_frame_vci, _mock_get_redis_client
     ):
-        mock_balance_sheet_frame.return_value = pd.DataFrame(
+        mock_balance_sheet_frame_vci.return_value = pd.DataFrame(
             {
                 "TOTAL ASSETS": [1_000_000],
                 "OWNER'S EQUITY": [600_000],
@@ -618,6 +681,32 @@ class TestFetchBalanceSheet:
         assert result["long_term_liabilities"].iloc[0] == 200_000
         # Derived from short + long liabilities (or total_assets - total_equity)
         assert result["total_liabilities"].iloc[0] == 400_000
+
+    @patch("dags.etl_modules.cache.get_redis_client", return_value=None)
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame")
+    @patch("dags.etl_modules.fetcher.fetch_balance_sheet_frame_vci")
+    def test_balance_sheet_falls_back_to_kbs_when_vci_empty(
+        self,
+        mock_balance_vci,
+        mock_balance_kbs,
+        _mock_get_redis_client,
+    ):
+        mock_balance_vci.return_value = pd.DataFrame()
+        mock_balance_kbs.return_value = pd.DataFrame(
+            {
+                "Tổng tài sản": [800_000],
+                "Tổng nợ phải trả": [300_000],
+                "Vốn chủ sở hữu": [500_000],
+                "yearReport": [2024],
+                "lengthReport": [4],
+            }
+        )
+
+        result = fetch_balance_sheet("VNM", "asset-vnm")
+
+        assert not result.empty
+        assert result["source_provider"].iloc[0] == "KBS"
+        assert result["total_assets"].iloc[0] == 800_000
 
 
 @pytest.mark.unit

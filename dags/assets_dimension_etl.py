@@ -4,7 +4,8 @@ Story: prep-3-seed-asset-data
 Architecture: Single Table Inheritance (STI)
 
 Fetches:
-- VN listed instruments (VCI provider) → mapped to supported asset_class values, market=VN
+- VN listed instruments (VCI provider)
+    -> mapped to supported asset_class values, market=VN
 - US stocks (Wikipedia S&P 500 + yfinance) → asset_class=STOCK, market=US
 - Crypto (CoinGecko) → asset_class=CRYPTO, market=NULL
 - Precious metals (yfinance futures mapping) → asset_class=COMMODITY, market=NULL
@@ -24,18 +25,10 @@ import psycopg2.extras
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 
-try:
-    from etl_modules.vci_provider import (
-        fetch_vn_industry_metadata,
-        fetch_vn_listing_symbols,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "etl_modules":
-        raise
-    from dags.etl_modules.vci_provider import (
-        fetch_vn_industry_metadata,
-        fetch_vn_listing_symbols,
-    )
+from dags.etl_modules.vci_provider import (
+    fetch_vn_industry_metadata,
+    fetch_vn_listing_symbols,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,22 +62,6 @@ def upsert_assets_records(records: list[dict]) -> int:
     """Upsert asset records directly into market_data.assets using Supabase Postgres."""
     if not records:
         return 0
-
-    cols = [
-        "symbol",
-        "name_en",
-        "name_local",
-        "asset_class",
-        "market",
-        "currency",
-        "exchange",
-        "sector",
-        "industry",
-        "industry_code",
-        "logo_url",
-        "metadata",
-        "source",
-    ]
 
     def _map_row(rec: dict) -> tuple:
         market = rec.get("market")
@@ -123,7 +100,8 @@ def upsert_assets_records(records: list[dict]) -> int:
                     """
                     INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
-                         exchange, sector, industry, industry_code, logo_url, metadata, source)
+                         exchange, sector, industry, industry_code,
+                         logo_url, metadata, source)
                     VALUES %s
                     ON CONFLICT (symbol, market, asset_class)
                     WHERE market IS NOT NULL
@@ -149,7 +127,8 @@ def upsert_assets_records(records: list[dict]) -> int:
                     """
                     INSERT INTO market_data.assets
                         (symbol, name_en, name_local, asset_class, market, currency,
-                         exchange, sector, industry, industry_code, logo_url, metadata, source)
+                         exchange, sector, industry, industry_code,
+                         logo_url, metadata, source)
                     VALUES %s
                     ON CONFLICT (symbol, asset_class)
                     WHERE market IS NULL
@@ -259,7 +238,8 @@ def fetch_vn_instruments(**context):
     df_list = df_list[df_list["exchange"].str.upper() != "DELISTED"]
     if "type" not in df_list.columns:
         logger.warning(
-            "VCI provider returned no type column; defaulting all VN instruments to STOCK"
+            "VCI provider returned no type column; "
+            "defaulting all VN instruments to STOCK"
         )
         df_list["type"] = "STOCK"
     df_list["asset_class"] = df_list.apply(
@@ -321,7 +301,8 @@ def fetch_vn_instruments(**context):
             {
                 "symbol": str(row["symbol"]),
                 # vnstock only provides 'organ_name' (Vietnamese).
-                # We use it for both name_en and name_local to ensure UI has a display name.
+                # We use it for both name_en and name_local
+                # to ensure UI has a display name.
                 # TODO: (Improvement) find api to get correct name_en of vn stocks
                 "name_en": str(row["organ_name"])
                 if pd.notna(row["organ_name"])
@@ -397,7 +378,11 @@ def fetch_us_stocks(**context):
     import requests
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/91.0.4472.124 Safari/537.36"
+        )
     }
     response = requests.get(url, headers=headers)
     response.raise_for_status()
@@ -407,7 +392,7 @@ def fetch_us_stocks(**context):
 
     # Step 2: Fetch metadata and market caps
     enriched_data = []
-    for idx, row in sp500_df.iterrows():
+    for idx, (_, row) in enumerate(sp500_df.iterrows(), start=1):
         symbol = row["Symbol"]
         try:
             ticker = yf.Ticker(symbol)
@@ -603,7 +588,9 @@ def fetch_precious_metals(**context):
             exchange = str(info.get("exchange") or exchange)
         except Exception as e:
             logger.warning(
-                f"Could not enrich {metal['symbol']} from yfinance {metal['source_symbol']}: {e}"
+                "Could not enrich "
+                f"{metal['symbol']} from yfinance "
+                f"{metal['source_symbol']}: {e}"
             )
 
         records.append(
@@ -664,4 +651,4 @@ task_precious_metals = PythonOperator(
 )
 
 # All tasks run in parallel
-[task_vn, task_us, task_crypto, task_precious_metals]
+_ = [task_vn, task_us, task_crypto, task_precious_metals]
