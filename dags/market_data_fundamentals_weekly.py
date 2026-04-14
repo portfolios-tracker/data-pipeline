@@ -170,15 +170,15 @@ with DAG(
     with TaskGroup("fundamental_pipeline", tooltip="Income Statements") as fund_group:
         e_inc = extract_income_statements.override(pool=FINANCE_PROVIDER_POOL)()
         l_inc = load_income_statements(e_inc)
-        e_inc >> l_inc
+        _ = e_inc >> l_inc
 
     with TaskGroup(
         "balance_sheet_group", tooltip="Quarterly Balance Sheets"
     ) as balance_group:
         e_bal = extract_balance_sheets.override(pool=FINANCE_PROVIDER_POOL)()
         l_bal = load_balance_sheets(e_bal)
-        e_bal >> l_bal
+        _ = e_bal >> l_bal
 
     final_summary = finalize_fundamentals_load(l_inc, l_bal)
 
-    [fund_group, balance_group] >> final_summary
+    _ = [fund_group, balance_group] >> final_summary
