@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
+def truncate_text(text: str, max_chars: int = 1000) -> str:
+    """Truncates text to a maximum number of characters and appends '...' if truncated."""
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
+
 default_args = {
     "owner": "data_engineer",
     "retries": 2,
@@ -101,7 +109,7 @@ with DAG(
 
         logger.info("extract_and_load_news: complete")
 
-    @task
+    @task(pool="gemini_api_pool")
     def score_news() -> None:
         """Add sentiment score to unscored news records using Gemini online API (Tier 1 limits)."""
         import time
@@ -271,7 +279,7 @@ with DAG(
                     "Saved sentiment scores for %s news items.", len(batch_updates)
                 )
 
-    @task
+    @task(pool="gemini_api_pool")
     def embed_news() -> None:
         """
         Embed today's new articles with gemini-embedding-001 @ 768d.
