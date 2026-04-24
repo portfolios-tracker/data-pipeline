@@ -41,24 +41,71 @@ with DAG(
 ) as dag:
 
     @task
-    def extract_news() -> list[dict]:
+    def extract_and_load_news() -> None:
+        """
+        Extract news from all sources and load them directly into the database
+        to avoid large XCom payloads.
+        """
         data = run_all_extractors()
+        logger.info("extract_and_load_news: %s records extracted from all sources", len(data))
+
+        if not data:
+            logger.info("No news to load.")
+            return
+
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
+
+        cols = [
+            "asset_id",
+            "news_id",
+            "publish_date",
+            "title",
+            "news_content",
+            "source",
+            "source_url",
+        ]
+        tuples = []
         for row in data:
-            if row.get("publish_date") and not isinstance(row["publish_date"], str):
-                row["publish_date"] = str(row["publish_date"])
-        logger.info("extract_news: %s records from all sources", len(data))
-        return data
+            if row.get("publish_date"):
+                row["publish_date"] = pd.to_datetime(row["publish_date"])
+            tuples.append([row.get(c) for c in cols])
+
+        logger.info("extract_and_load_news: inserting %s rows into market_data.news", len(tuples))
+        conn = psycopg2.connect(SUPABASE_DB_URL)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO market_data.news
+                            (asset_id, news_id, publish_date, title,
+                             news_content, source, source_url)
+                        VALUES %s
+                        ON CONFLICT (asset_id, news_id) DO UPDATE SET
+                            title           = EXCLUDED.title,
+                            news_content    = EXCLUDED.news_content,
+                            ingested_at     = NOW()
+                        """,
+                        tuples,
+                    )
+        finally:
+            conn.close()
+
+        logger.info("extract_and_load_news: complete")
 
     @task
-    def score_news(data: list[dict]) -> list[dict]:
-        """Add sentiment score to each news record using Gemini with batching."""
-        if not data:
-            return []
-
+    def score_news() -> None:
+        """Add sentiment score to unscored news records using Gemini with batching."""
+        import time
         from google import genai
         from google.genai import errors, types
 
         task_logger = logging.getLogger("airflow.task")
+
+        if not SUPABASE_DB_URL:
+            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
@@ -70,12 +117,28 @@ with DAG(
             conn.close()
 
         if not google_api_key:
-            task_logger.warning(
-                "GEMINI_API_KEY not found in Vault. Skipping sentiment scoring."
-            )
-            for row in data:
-                row["sentiment_score"] = 0.0
-            return data
+            task_logger.warning("GEMINI_API_KEY not found in Vault. Skipping sentiment scoring.")
+            return
+
+        # Read unscored news, deduplicating by news_id
+        conn = psycopg2.connect(SUPABASE_DB_URL)
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT news_id, max(title) as title, max(news_content) as description
+                    FROM market_data.news
+                    WHERE sentiment_score IS NULL
+                    GROUP BY news_id
+                    """
+                )
+                data = cur.fetchall()
+        finally:
+            conn.close()
+
+        if not data:
+            task_logger.info("No unscored news found.")
+            return
 
         try:
             client = genai.Client(api_key=google_api_key)
@@ -86,13 +149,14 @@ with DAG(
         batch_size = 15
         total_items = len(data)
         task_logger.info(
-            "Scoring sentiment for %s news items in batches of %s...",
+            "Scoring sentiment for %s unique news items in batches of %s...",
             total_items,
             batch_size,
         )
 
         for i in range(0, total_items, batch_size):
             batch = data[i : i + batch_size]
+            batch_updates = []
 
             items_text = ""
             for idx, item in enumerate(batch):
@@ -115,101 +179,83 @@ with DAG(
             {items_text}
             """
 
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    ),
-                )
-
+            max_retries = 3
+            for attempt in range(max_retries + 1):
                 try:
-                    raw_text = (response.text or "").strip()
-                    if raw_text.startswith("```"):
-                        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                        if match:
-                            raw_text = match.group(0)
+                    response = client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                        ),
+                    )
 
-                    result = json.loads(raw_text)
-                    scores_list = result.get("scores", [])
-                    scores_map = {
-                        item["id"]: item["score"]
-                        for item in scores_list
-                        if "id" in item and "score" in item
-                    }
+                    try:
+                        raw_text = (response.text or "").strip()
+                        if raw_text.startswith("```"):
+                            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+                            if match:
+                                raw_text = match.group(0)
 
-                    for idx, item in enumerate(batch):
-                        score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
-                        item["sentiment_score"] = max(-1.0, min(1.0, float(score)))
-                except (json.JSONDecodeError, ValueError, KeyError) as e:
+                        result = json.loads(raw_text)
+                        scores_list = result.get("scores", [])
+                        scores_map = {
+                            item["id"]: item["score"]
+                            for item in scores_list
+                            if "id" in item and "score" in item
+                        }
+
+                        for idx, item in enumerate(batch):
+                            score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
+                            sentiment_score = max(-1.0, min(1.0, float(score)))
+                            batch_updates.append((sentiment_score, item["news_id"]))
+                        
+                        break  # Success
+                    except (json.JSONDecodeError, ValueError, KeyError) as e:
+                        task_logger.error(
+                            "Failed to parse Gemini response for batch starting at %s: %s",
+                            i,
+                            e,
+                        )
+                        task_logger.debug("Raw response: %s", response.text)
+                        for item in batch:
+                            batch_updates.append((0.0, item["news_id"]))
+                        break
+
+                except errors.APIError as e:
+                    if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
+                        wait = 60 * (2 ** attempt)  # 60, 120, 240s
+                        task_logger.warning("Rate limit hit on batch %s, sleeping %ss", i, wait)
+                        time.sleep(wait)
+                        continue
+                    else:
+                        task_logger.error("Gemini API Error (batch starting at %s): %s", i, e)
+                        raise
+                except Exception as e:
                     task_logger.error(
-                        "Failed to parse Gemini response for batch starting at %s: %s",
-                        i,
-                        e,
+                        "Unexpected error scoring batch starting at %s: %s", i, e
                     )
-                    task_logger.debug("Raw response: %s", response.text)
-                    for item in batch:
-                        item["sentiment_score"] = 0.0
+                    raise
 
-            except errors.APIError as e:
-                task_logger.error("Gemini API Error (batch starting at %s): %s", i, e)
-                raise
-            except Exception as e:
-                task_logger.error(
-                    "Unexpected error scoring batch starting at %s: %s", i, e
-                )
-                raise
-
-        return data
-
-    @task
-    def load_news(data: list[dict]) -> None:
-        if not data:
-            logger.info("No news to load.")
-            return
-
-        if not SUPABASE_DB_URL:
-            raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
-
-        cols = [
-            "asset_id",
-            "news_id",
-            "publish_date",
-            "title",
-            "news_content",
-            "source",
-            "source_url",
-            "sentiment_score",
-        ]
-        tuples = []
-        for row in data:
-            if row.get("publish_date"):
-                row["publish_date"] = pd.to_datetime(row["publish_date"])
-            tuples.append([row.get(c) for c in cols])
-
-        logger.info("load_news: inserting %s rows into market_data.news", len(tuples))
-        conn = psycopg2.connect(SUPABASE_DB_URL)
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        """
-                        INSERT INTO market_data.news
-                            (asset_id, news_id, publish_date, title,
-                             news_content, source, source_url, sentiment_score)
-                        VALUES %s
-                        ON CONFLICT (asset_id, news_id) DO UPDATE SET
-                            sentiment_score = EXCLUDED.sentiment_score,
-                            ingested_at     = NOW()
-                        """,
-                        tuples,
-                    )
-        finally:
-            conn.close()
-
-        logger.info("load_news: complete")
+            # Update the database incrementally (no waste pattern)
+            if batch_updates:
+                conn = psycopg2.connect(SUPABASE_DB_URL)
+                try:
+                    with conn:
+                        with conn.cursor() as cur:
+                            psycopg2.extras.execute_values(
+                                cur,
+                                """
+                                UPDATE market_data.news AS n
+                                SET sentiment_score = v.sentiment_score
+                                FROM (VALUES %s) AS v(sentiment_score, news_id)
+                                WHERE n.news_id = v.news_id
+                                """,
+                                batch_updates
+                            )
+                finally:
+                    conn.close()
+                task_logger.info("Saved sentiment scores for %s news items.", len(batch_updates))
 
     @task
     def embed_news() -> None:
@@ -275,88 +321,85 @@ with DAG(
             task_logger.info("embed_news: no new articles to embed today")
             return
 
-        texts = [f"{r['title']}. {r['news_content'] or ''}".strip() for r in rows]
         task_logger.info(
-            "embed_news: embedding %s articles with %s @ %dd", len(texts), MODEL, DIM
+            "embed_news: embedding %s articles with %s @ %dd", len(rows), MODEL, DIM
         )
 
-        # ── Batch embedding with rate-limit retry ─────────────────────────────
-        def _embed_batch(batch: list[str]) -> list:
-            try:
-                result = client.models.embed_content(
-                    model=MODEL,
-                    contents=batch,
-                    config=types.EmbedContentConfig(
-                        task_type="RETRIEVAL_DOCUMENT",
-                        output_dimensionality=DIM,
-                    ),
-                )
-                return result.embeddings
-            except errors.APIError as e:
-                if "RESOURCE_EXHAUSTED" in str(e):
-                    task_logger.warning("Rate limit hit, sleeping 60s then retrying")
-                    time.sleep(60)
-                    result = client.models.embed_content(
-                        model=MODEL,
-                        contents=batch,
-                        config=types.EmbedContentConfig(
-                            task_type="RETRIEVAL_DOCUMENT",
-                            output_dimensionality=DIM,
-                        ),
-                    )
-                    return result.embeddings
-                raise
-
-        all_embeddings = []
-        for i in range(0, len(texts), BATCH):
-            all_embeddings.extend(_embed_batch(texts[i : i + BATCH]))
-
-        # ── Normalize (required for MRL-truncated dimensions < 3072) ──────────
         def _normalize(vec: list[float]) -> list[float]:
             arr = np.array(vec, dtype=np.float32)
             norm = np.linalg.norm(arr)
             return (arr / norm if norm > 0 else arr).tolist()
 
-        tuples = [
-            (
-                str(rows[i]["asset_id"]),
-                int(rows[i]["news_id"]),
-                _normalize(emb.values),
-                "gemini-embedding-001-768d",
-            )
-            for i, emb in enumerate(all_embeddings)
-        ]
+        max_retries = 3
 
-        # ── Upsert into news_embeddings ───────────────────────────────────────
-        conn = psycopg2.connect(SUPABASE_DB_URL)
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        """
-                        INSERT INTO market_data.news_embeddings
-                            (asset_id, news_id, embedding, model_ver)
-                        VALUES %s
-                        ON CONFLICT (asset_id, news_id) DO UPDATE SET
-                            embedding   = EXCLUDED.embedding,
-                            model_ver   = EXCLUDED.model_ver,
-                            embedded_at = NOW()
-                        """,
-                        tuples,
+        # ── Batch embedding with incremental save (no waste) ──────────────────
+        for i in range(0, len(rows), BATCH):
+            batch_rows = rows[i : i + BATCH]
+            texts = [f"{r['title']}. {r['news_content'] or ''}".strip() for r in batch_rows]
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    result = client.models.embed_content(
+                        model=MODEL,
+                        contents=texts,
+                        config=types.EmbedContentConfig(
+                            task_type="RETRIEVAL_DOCUMENT",
+                            output_dimensionality=DIM,
+                        ),
                     )
-        finally:
-            conn.close()
+                    
+                    tuples = [
+                        (
+                            str(batch_rows[j]["asset_id"]),
+                            int(batch_rows[j]["news_id"]),
+                            _normalize(emb.values),
+                            "gemini-embedding-001-768d",
+                        )
+                        for j, emb in enumerate(result.embeddings)
+                    ]
 
-        task_logger.info(
-            "embed_news: inserted %s embeddings with model %s", len(tuples), MODEL
-        )
+                    # Upsert into news_embeddings immediately
+                    conn = psycopg2.connect(SUPABASE_DB_URL)
+                    try:
+                        with conn:
+                            with conn.cursor() as cur:
+                                psycopg2.extras.execute_values(
+                                    cur,
+                                    """
+                                    INSERT INTO market_data.news_embeddings
+                                        (asset_id, news_id, embedding, model_ver)
+                                    VALUES %s
+                                    ON CONFLICT (asset_id, news_id) DO UPDATE SET
+                                        embedding   = EXCLUDED.embedding,
+                                        model_ver   = EXCLUDED.model_ver,
+                                        embedded_at = NOW()
+                                    """,
+                                    tuples,
+                                )
+                    finally:
+                        conn.close()
+
+                    task_logger.info("Saved %s embeddings for batch starting at %s", len(tuples), i)
+                    break  # Break out of retry loop on success
+
+                except errors.APIError as e:
+                    if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
+                        wait = 60 * (2 ** attempt)
+                        task_logger.warning("Rate limit hit on batch %s, sleeping %ss", i, wait)
+                        time.sleep(wait)
+                        continue
+                    else:
+                        task_logger.error("Gemini API Error (batch starting at %s): %s", i, e)
+                        raise
+                except Exception as e:
+                    task_logger.error(
+                        "Unexpected error embedding batch starting at %s: %s", i, e
+                    )
+                    raise
 
     # ── DAG orchestration ─────────────────────────────────────────────────────
-    # embed_news reads from the DB directly, but news rows must exist first
-    # so we declare an explicit dependency on the load_news task instance.
-    raw_news = extract_news()
-    scored_news = score_news(raw_news)
-    loaded = load_news(scored_news)
+    extract = extract_and_load_news()
+    score = score_news()
     embed = embed_news()
-    loaded >> embed
+
+    extract >> score >> embed

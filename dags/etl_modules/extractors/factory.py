@@ -14,7 +14,7 @@ from dags.etl_modules.fetcher import get_active_vn_stock_tickers
 logger = logging.getLogger(__name__)
 
 EXTRACTOR_CLASSES = [BizhubExtractor, TheInvestorExtractor]
-EXTRACTOR_TIMEOUT_SECS = 120
+EXTRACTOR_TIMEOUT_SECS = 1800
 
 
 def run_all_extractors() -> list[dict]:
