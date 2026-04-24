@@ -5,8 +5,11 @@ FROM rust:1-slim-bookworm AS webclaw-builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    build-essential \
     pkg-config \
     libssl-dev \
+    git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install --git https://github.com/0xMassi/webclaw.git webclaw-cli
