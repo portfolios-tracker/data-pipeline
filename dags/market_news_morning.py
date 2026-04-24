@@ -162,122 +162,75 @@ with DAG(
             task_logger.error(f"Failed to initialize Gemini client: {e}")
             raise
 
-        batch_size = 15
-        total_items = len(data)
-        task_logger.info(
-            "Scoring sentiment for %s unique news items in batches of %s (Tier 1: 2000 RPM)...",
-            total_items,
-            batch_size,
+        inline_requests = []
+        for item in data:
+            title = item.get("title", "No Title")
+            raw_desc = item.get("description", "")
+            desc = truncate_text(raw_desc, 1000)
+            
+            prompt = f"Analyze sentiment for the following financial news item from the Vietnamese stock market. Return a single numeric score between -1.0 (extremely negative) and 1.0 (extremely positive). 0.0 is neutral. Just return the number, nothing else.\n\nTitle: {title}\nContent: {desc}"
+            
+            inline_requests.append({
+                "contents": [{"parts": [{"text": prompt}]}],
+            })
+
+        task_logger.info("Submitting batch job for %s items...", len(data))
+        
+        batch_job = client.batches.create(
+            model="gemini-2.0-flash",
+            src=inline_requests
         )
+        task_logger.info("Batch job %s submitted.", batch_job.name)
 
-        for i in range(0, total_items, batch_size):
-            batch = data[i : i + batch_size]
-            batch_updates = []
+        completed_states = {'JOB_STATE_SUCCEEDED', 'JOB_STATE_FAILED', 'JOB_STATE_CANCELLED', 'JOB_STATE_PAUSED'}
+        while batch_job.state.name not in completed_states:
+            time.sleep(30)
+            batch_job = client.batches.get(name=batch_job.name)
+            task_logger.info("Batch job status: %s", batch_job.state.name)
 
-            items_text = ""
-            for idx, item in enumerate(batch):
-                title = item.get("title", "No Title")
-                desc = item.get("description", "")
-                items_text += f"ID: {idx}\nTitle: {title}\nContent: {desc}\n---\n"
+        if batch_job.state.name != 'JOB_STATE_SUCCEEDED':
+            raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
-            prompt = f"""
-            Analyze sentiment for the following {len(batch)} financial news items
-            from the Vietnamese stock market.
-            For each item, provide a sentiment score between -1.0
-            (extremely negative) and 1.0 (extremely positive).
-            0.0 is neutral.
+        output_file_name = batch_job.dest.file_name
+        content_bytes = client.files.download(file=output_file_name)
+        
+        import json
+        batch_updates = []
+        lines = [line for line in content_bytes.decode('utf-8').split('\n') if line.strip()]
+        
+        for idx, line in enumerate(lines):
+            try:
+                res = json.loads(line)
+                response_text = res.get('response', {}).get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '0.0')
+                import re as regex
+                match = regex.search(r'-?\d+\.\d+|-?\d+', response_text)
+                score = float(match.group()) if match else 0.0
+                sentiment_score = max(-1.0, min(1.0, score))
+                
+                news_id = data[idx]['news_id']
+                batch_updates.append((sentiment_score, news_id))
+            except Exception as e:
+                task_logger.error(f"Failed to parse line {idx}: {e}")
+                batch_updates.append((0.0, data[idx]['news_id']))
 
-            Return results as JSON with key "scores" containing an array.
-            Each item must include "id" (the ID in this prompt)
-            and "score" (numeric sentiment score).
-
-            Items:
-            {items_text}
-            """
-
-            max_retries = 3
-            for attempt in range(max_retries + 1):
-                try:
-                    response = client.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                        ),
-                    )
-
-                    try:
-                        raw_text = (response.text or "").strip()
-                        if raw_text.startswith("```"):
-                            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                            if match:
-                                raw_text = match.group(0)
-
-                        result = json.loads(raw_text)
-                        scores_list = result.get("scores", [])
-                        scores_map = {
-                            item["id"]: item["score"]
-                            for item in scores_list
-                            if "id" in item and "score" in item
-                        }
-
-                        for idx, item in enumerate(batch):
-                            score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
-                            sentiment_score = max(-1.0, min(1.0, float(score)))
-                            batch_updates.append((sentiment_score, item["news_id"]))
-
-                        break  # Success
-                    except (json.JSONDecodeError, ValueError, KeyError) as e:
-                        task_logger.error(
-                            "Failed to parse Gemini response for batch starting at %s: %s",
-                            i,
-                            e,
+        if batch_updates:
+            conn = psycopg2.connect(SUPABASE_DB_URL)
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            UPDATE market_data.news AS n
+                            SET sentiment_score = v.sentiment_score
+                            FROM (VALUES %s) AS v(sentiment_score, news_id)
+                            WHERE n.news_id = v.news_id
+                            """,
+                            batch_updates,
                         )
-                        task_logger.debug("Raw response: %s", response.text)
-                        for item in batch:
-                            batch_updates.append((0.0, item["news_id"]))
-                        break
-
-                except errors.APIError as e:
-                    if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 5 * (2**attempt)  # 5, 10, 20s
-                        task_logger.warning(
-                            "Rate limit hit on batch %s, sleeping %ss", i, wait
-                        )
-                        time.sleep(wait)
-                        continue
-                    else:
-                        task_logger.error(
-                            "Gemini API Error (batch starting at %s): %s", i, e
-                        )
-                        raise
-                except Exception as e:
-                    task_logger.error(
-                        "Unexpected error scoring batch starting at %s: %s", i, e
-                    )
-                    raise
-
-            # Update the database incrementally (no waste pattern)
-            if batch_updates:
-                conn = psycopg2.connect(SUPABASE_DB_URL)
-                try:
-                    with conn:
-                        with conn.cursor() as cur:
-                            psycopg2.extras.execute_values(
-                                cur,
-                                """
-                                UPDATE market_data.news AS n
-                                SET sentiment_score = v.sentiment_score
-                                FROM (VALUES %s) AS v(sentiment_score, news_id)
-                                WHERE n.news_id = v.news_id
-                                """,
-                                batch_updates,
-                            )
-                finally:
-                    conn.close()
-                task_logger.info(
-                    "Saved sentiment scores for %s news items.", len(batch_updates)
-                )
+            finally:
+                conn.close()
+            task_logger.info("Saved sentiment scores for %s news items.", len(batch_updates))
 
     @task(pool="gemini_api_pool")
     def embed_news() -> None:
