@@ -47,7 +47,9 @@ with DAG(
         to avoid large XCom payloads.
         """
         data = run_all_extractors()
-        logger.info("extract_and_load_news: %s records extracted from all sources", len(data))
+        logger.info(
+            "extract_and_load_news: %s records extracted from all sources", len(data)
+        )
 
         if not data:
             logger.info("No news to load.")
@@ -71,7 +73,10 @@ with DAG(
                 row["publish_date"] = pd.to_datetime(row["publish_date"])
             tuples.append([row.get(c) for c in cols])
 
-        logger.info("extract_and_load_news: inserting %s rows into market_data.news", len(tuples))
+        logger.info(
+            "extract_and_load_news: inserting %s rows into market_data.news",
+            len(tuples),
+        )
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
             with conn:
@@ -117,7 +122,9 @@ with DAG(
             conn.close()
 
         if not google_api_key:
-            task_logger.warning("GEMINI_API_KEY not found in Vault. Skipping sentiment scoring.")
+            task_logger.warning(
+                "GEMINI_API_KEY not found in Vault. Skipping sentiment scoring."
+            )
             return
 
         # Read unscored news, deduplicating by news_id
@@ -209,7 +216,7 @@ with DAG(
                             score = scores_map.get(idx, scores_map.get(str(idx), 0.0))
                             sentiment_score = max(-1.0, min(1.0, float(score)))
                             batch_updates.append((sentiment_score, item["news_id"]))
-                        
+
                         break  # Success
                     except (json.JSONDecodeError, ValueError, KeyError) as e:
                         task_logger.error(
@@ -224,12 +231,16 @@ with DAG(
 
                 except errors.APIError as e:
                     if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 60 * (2 ** attempt)  # 60, 120, 240s
-                        task_logger.warning("Rate limit hit on batch %s, sleeping %ss", i, wait)
+                        wait = 60 * (2**attempt)  # 60, 120, 240s
+                        task_logger.warning(
+                            "Rate limit hit on batch %s, sleeping %ss", i, wait
+                        )
                         time.sleep(wait)
                         continue
                     else:
-                        task_logger.error("Gemini API Error (batch starting at %s): %s", i, e)
+                        task_logger.error(
+                            "Gemini API Error (batch starting at %s): %s", i, e
+                        )
                         raise
                 except Exception as e:
                     task_logger.error(
@@ -251,11 +262,13 @@ with DAG(
                                 FROM (VALUES %s) AS v(sentiment_score, news_id)
                                 WHERE n.news_id = v.news_id
                                 """,
-                                batch_updates
+                                batch_updates,
                             )
                 finally:
                     conn.close()
-                task_logger.info("Saved sentiment scores for %s news items.", len(batch_updates))
+                task_logger.info(
+                    "Saved sentiment scores for %s news items.", len(batch_updates)
+                )
 
     @task
     def embed_news() -> None:
@@ -335,8 +348,10 @@ with DAG(
         # ── Batch embedding with incremental save (no waste) ──────────────────
         for i in range(0, len(rows), BATCH):
             batch_rows = rows[i : i + BATCH]
-            texts = [f"{r['title']}. {r['news_content'] or ''}".strip() for r in batch_rows]
-            
+            texts = [
+                f"{r['title']}. {r['news_content'] or ''}".strip() for r in batch_rows
+            ]
+
             for attempt in range(max_retries + 1):
                 try:
                     result = client.models.embed_content(
@@ -347,7 +362,7 @@ with DAG(
                             output_dimensionality=DIM,
                         ),
                     )
-                    
+
                     tuples = [
                         (
                             str(batch_rows[j]["asset_id"]),
@@ -379,17 +394,23 @@ with DAG(
                     finally:
                         conn.close()
 
-                    task_logger.info("Saved %s embeddings for batch starting at %s", len(tuples), i)
+                    task_logger.info(
+                        "Saved %s embeddings for batch starting at %s", len(tuples), i
+                    )
                     break  # Break out of retry loop on success
 
                 except errors.APIError as e:
                     if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 60 * (2 ** attempt)
-                        task_logger.warning("Rate limit hit on batch %s, sleeping %ss", i, wait)
+                        wait = 60 * (2**attempt)
+                        task_logger.warning(
+                            "Rate limit hit on batch %s, sleeping %ss", i, wait
+                        )
                         time.sleep(wait)
                         continue
                     else:
-                        task_logger.error("Gemini API Error (batch starting at %s): %s", i, e)
+                        task_logger.error(
+                            "Gemini API Error (batch starting at %s): %s", i, e
+                        )
                         raise
                 except Exception as e:
                     task_logger.error(
