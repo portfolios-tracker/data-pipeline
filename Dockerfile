@@ -40,7 +40,7 @@ COPY pyproject.toml uv.lock README.md /opt/airflow/
 
 RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
     uv export --format requirements-txt --no-dev --no-hashes \
-    --python-version 3.13 \
+    --python 3.12 \
     -o /tmp/requirements.txt && \
     uv pip install --system --no-cache -r /tmp/requirements.txt
 
