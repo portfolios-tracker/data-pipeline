@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -102,7 +103,7 @@ with DAG(
 
     @task
     def score_news() -> None:
-        """Add sentiment score to unscored news records using Gemini with batching."""
+        """Add sentiment score to unscored news records using Gemini online API (Tier 1 limits)."""
         import time
         from google import genai
         from google.genai import errors, types
@@ -156,7 +157,7 @@ with DAG(
         batch_size = 15
         total_items = len(data)
         task_logger.info(
-            "Scoring sentiment for %s unique news items in batches of %s...",
+            "Scoring sentiment for %s unique news items in batches of %s (Tier 1: 2000 RPM)...",
             total_items,
             batch_size,
         )
@@ -231,7 +232,7 @@ with DAG(
 
                 except errors.APIError as e:
                     if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 60 * (2**attempt)  # 60, 120, 240s
+                        wait = 5 * (2**attempt)  # 5, 10, 20s
                         task_logger.warning(
                             "Rate limit hit on batch %s, sleeping %ss", i, wait
                         )
@@ -335,7 +336,10 @@ with DAG(
             return
 
         task_logger.info(
-            "embed_news: embedding %s articles with %s @ %dd", len(rows), MODEL, DIM
+            "embed_news: embedding %s articles with %s @ %dd (Tier 1: High RPM limit)",
+            len(rows),
+            MODEL,
+            DIM,
         )
 
         def _normalize(vec: list[float]) -> list[float]:
@@ -401,7 +405,7 @@ with DAG(
 
                 except errors.APIError as e:
                     if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 60 * (2**attempt)
+                        wait = 5 * (2**attempt)
                         task_logger.warning(
                             "Rate limit hit on batch %s, sleeping %ss", i, wait
                         )

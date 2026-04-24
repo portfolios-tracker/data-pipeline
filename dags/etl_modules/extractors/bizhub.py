@@ -50,6 +50,7 @@ _NOISE_LINE_RE = re.compile(
     | —\s*Photo
     | —\s*BIZHUB\s*$
     | ^\+\s*Load\s+more
+    | ^[A-Z]{3},\s+[A-Z]+\s+\d{1,2},\s+\d{4}\s*\|.*$
     """,
     re.VERBOSE | re.IGNORECASE,
 )
