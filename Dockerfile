@@ -10,8 +10,8 @@ RUN apt-get update && \
     cmake \
     pkg-config \
     libssl-dev \
+    clang \
     git \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install --git https://github.com/0xMassi/webclaw.git webclaw-cli
