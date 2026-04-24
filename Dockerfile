@@ -1,10 +1,23 @@
-# Use the official Airflow image. 
-# NOTE: Ensure you are pulling the correct tag for Airflow 3 if it is in beta, 
-# otherwise use 'latest' or '2.10.x' until 3.0 GA is pinned.
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1: Build the webclaw CLI from source
+# ──────────────────────────────────────────────────────────────────────────────
+FROM rust:1-slim-bookworm AS webclaw-builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install --git https://github.com/0xMassi/webclaw.git webclaw-cli
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 2: Production Airflow image
+# ──────────────────────────────────────────────────────────────────────────────
 FROM apache/airflow:latest 
 
-# Switch to root for system dependencies
 USER root
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -16,26 +29,18 @@ RUN apt-get update && \
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Switch back to airflow user
-
-USER airflow
-
-
-
-# Copy dependency/project metadata files needed for wheel build
-COPY pyproject.toml uv.lock README.md /opt/airflow/
-
-
-
-# Install packages using uv
-
-# We use --system to install into the image's python environment
+# Install webclaw with proper execute permissions
+COPY --from=webclaw-builder /usr/local/cargo/bin/webclaw /usr/local/bin/webclaw
+RUN chmod 755 /usr/local/bin/webclaw
 
 WORKDIR /opt/airflow
 
-USER root
+# Copy dependency/project metadata files needed for wheel build
+# These are copied before source for optimal layer caching
+COPY pyproject.toml uv.lock README.md /opt/airflow/
 
-RUN --mount=type=cache,id=uv,target=/opt/airflow/.cache/uv \
+# Install Python packages using uv with proper cache mount path
+RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
     uv export --format requirements-txt --no-dev --no-hashes -o /tmp/requirements.txt && \
     uv pip install --system --no-cache -r /tmp/requirements.txt
 

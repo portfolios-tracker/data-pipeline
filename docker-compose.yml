@@ -2,6 +2,9 @@ name: portfolios-tracker-data
 
 x-airflow-common: &airflow-common
   image: portfolios-tracker-airflow:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -19,7 +22,6 @@ x-airflow-common: &airflow-common
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
     PYTHONPATH: "/opt/airflow"
     NUMBA_CACHE_DIR: /tmp
-    # Connect to the API service
     NESTJS_API_URL: "${NESTJS_API_URL:-http://host.docker.internal:3001}"
     TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
     TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
@@ -38,6 +40,8 @@ x-airflow-common: &airflow-common
     - ./scripts:/opt/airflow/scripts
     - ./sql:/opt/airflow/sql
   user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - airflow-backend
   depends_on: &airflow-common-depends-on
     redis:
       condition: service_healthy
@@ -46,35 +50,53 @@ x-airflow-common: &airflow-common
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+    networks:
+      - airflow-backend
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 10s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   redis:
     image: redis:7.2-bookworm
+    networks:
+      - airflow-backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 30s
-      retries: 50
-      start_period: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   airflow-init:
     <<: *airflow-common
-    build:
-      context: .
-      dockerfile: Dockerfile
     entrypoint: /bin/bash
     command:
       - -c
@@ -123,6 +145,14 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
 
   airflow-scheduler:
     <<: *airflow-common
@@ -138,6 +168,14 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
 
   airflow-dag-processor:
     <<: *airflow-common
@@ -153,6 +191,14 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
 
   airflow-worker:
     <<: *airflow-common
@@ -175,6 +221,14 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
 
   airflow-triggerer:
     <<: *airflow-common
@@ -190,6 +244,14 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
 
   flower:
     <<: *airflow-common
@@ -207,6 +269,18 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+networks:
+  airflow-backend:
+    driver: bridge
 
 volumes:
   postgres-db-volume:

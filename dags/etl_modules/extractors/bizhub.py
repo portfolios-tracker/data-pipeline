@@ -111,7 +111,9 @@ def _webclaw_scrape(url: str) -> dict | None:
             timeout=30,
         )
         if proc.returncode != 0:
-            logger.warning("webclaw error [%s]: %s", url[:80], proc.stderr.strip()[:200])
+            logger.warning(
+                "webclaw error [%s]: %s", url[:80], proc.stderr.strip()[:200]
+            )
             return None
         return json.loads(proc.stdout)
     except subprocess.TimeoutExpired:
@@ -120,8 +122,14 @@ def _webclaw_scrape(url: str) -> dict | None:
     except json.JSONDecodeError as exc:
         logger.warning("webclaw JSON parse error [%s]: %s", url[:80], exc)
         return None
+    except PermissionError:
+        raise RuntimeError(
+            "webclaw is not executable — ensure it has execute permissions in the Docker image"
+        )
     except FileNotFoundError:
-        raise RuntimeError("webclaw not found in PATH — ensure it is installed in the Docker image")
+        raise RuntimeError(
+            "webclaw not found in PATH — ensure it is installed in the Docker image"
+        )
 
 
 def _extract_news_id(url: str) -> int | None:
@@ -162,13 +170,16 @@ def _clean_body(plain_text: str) -> str:
 def _extract_metadata(raw: dict) -> dict:
     meta = raw.get("metadata", {})
     sd = raw.get("structured_data", [])
-    news_sd = next((s for s in sd if isinstance(s, dict) and s.get("@type") == "NewsArticle"), {})
+    news_sd = next(
+        (s for s in sd if isinstance(s, dict) and s.get("@type") == "NewsArticle"), {}
+    )
     links = raw.get("content", {}).get("links", [])
     tags = [l["text"] for l in links if "/tags/" in l.get("href", "") and l.get("text")]
     return {
         "title": news_sd.get("headline") or meta.get("title", ""),
         "description": news_sd.get("description") or meta.get("description", ""),
-        "published_date": news_sd.get("datePublished") or meta.get("published_date", ""),
+        "published_date": news_sd.get("datePublished")
+        or meta.get("published_date", ""),
         "tags": tags,
     }
 
@@ -214,12 +225,16 @@ def _parse_stubs_from_html(html_fragment: str) -> list[dict]:
         for h3 in soup.find_all("h3"):
             a = h3.find("a", href=re.compile(r"bizhub\.vietnamnews\.vn/.+-post\d+"))
             if a:
-                stubs.append({"title": a.get_text(strip=True), "url": a["href"].strip()})
+                stubs.append(
+                    {"title": a.get_text(strip=True), "url": a["href"].strip()}
+                )
 
     return stubs
 
 
-def _fetch_asmx_page(session: requests.Session, page_number: int) -> tuple[list[dict], int]:
+def _fetch_asmx_page(
+    session: requests.Session, page_number: int
+) -> tuple[list[dict], int]:
     payload = {
         "siteid": ASMX_SITEID,
         "catecode": ASMX_CATECODE,
@@ -315,18 +330,24 @@ class BizhubExtractor(NewsExtractor):
                 if article is None:
                     continue
 
-                matched = self._match_tickers(article["title"], article["news_content"] or "")
+                matched = self._match_tickers(
+                    article["title"], article["news_content"] or ""
+                )
                 for ticker in matched:
-                    articles.append({
-                        "symbol": ticker["symbol"],
-                        "asset_id": ticker["asset_id"],
-                        "news_id": article["news_id"],
-                        "title": article["title"],
-                        "news_content": article["news_content"],
-                        "publish_date": article["publish_date"],
-                        "source": "bizhub",
-                        "source_url": article["source_url"],
-                    })
+                    articles.append(
+                        {
+                            "symbol": ticker["symbol"],
+                            "asset_id": ticker["asset_id"],
+                            "news_id": article["news_id"],
+                            "title": article["title"],
+                            "news_content": article["news_content"],
+                            "publish_date": article["publish_date"],
+                            "source": "bizhub",
+                            "source_url": article["source_url"],
+                        }
+                    )
 
-        logger.info("BizhubExtractor: produced %s ticker-matched records", len(articles))
+        logger.info(
+            "BizhubExtractor: produced %s ticker-matched records", len(articles)
+        )
         return articles

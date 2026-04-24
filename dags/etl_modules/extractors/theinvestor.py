@@ -79,7 +79,9 @@ def _webclaw_scrape(url: str) -> dict | None:
             timeout=40,
         )
         if proc.returncode != 0:
-            logger.warning("webclaw error [%s]: %s", url[:80], proc.stderr.strip()[:200])
+            logger.warning(
+                "webclaw error [%s]: %s", url[:80], proc.stderr.strip()[:200]
+            )
             return None
         return json.loads(proc.stdout)
     except subprocess.TimeoutExpired:
@@ -88,8 +90,14 @@ def _webclaw_scrape(url: str) -> dict | None:
     except json.JSONDecodeError as exc:
         logger.warning("webclaw JSON parse error [%s]: %s", url[:80], exc)
         return None
+    except PermissionError:
+        raise RuntimeError(
+            "webclaw is not executable — ensure it has execute permissions in the Docker image"
+        )
     except FileNotFoundError:
-        raise RuntimeError("webclaw not found in PATH — ensure it is installed in the Docker image")
+        raise RuntimeError(
+            "webclaw not found in PATH — ensure it is installed in the Docker image"
+        )
 
 
 def _extract_news_id_from_url(url: str) -> int | None:
@@ -136,7 +144,11 @@ def _extract_metadata(raw: dict) -> dict:
     metadata = raw.get("metadata", {})
     structured_data = raw.get("structured_data", [])
     news_article = next(
-        (item for item in structured_data if isinstance(item, dict) and item.get("@type") == "NewsArticle"),
+        (
+            item
+            for item in structured_data
+            if isinstance(item, dict) and item.get("@type") == "NewsArticle"
+        ),
         {},
     )
     author = metadata.get("author", "")
@@ -154,7 +166,8 @@ def _extract_metadata(raw: dict) -> dict:
     ]
     return {
         "title": news_article.get("headline") or metadata.get("title", ""),
-        "published_date": news_article.get("datePublished") or metadata.get("published_date", ""),
+        "published_date": news_article.get("datePublished")
+        or metadata.get("published_date", ""),
         "tags": sorted(set(tags)),
     }
 
@@ -188,11 +201,13 @@ def _parse_listing_items(html_fragment: str) -> list[dict]:
         if news_id is None:
             continue
 
-        stubs.append({
-            "title": title_anchor.get_text(" ", strip=True),
-            "url": href,
-            "news_id": news_id,
-        })
+        stubs.append(
+            {
+                "title": title_anchor.get_text(" ", strip=True),
+                "url": href,
+                "news_id": news_id,
+            }
+        )
     return stubs
 
 
@@ -223,10 +238,14 @@ def _collect_stubs(max_articles: int = 200) -> list[dict]:
             "cate_id": CATE_ID,
         }
         try:
-            resp = session.get(LOAD_MORE_URL, headers=_LOAD_MORE_HEADERS, params=params, timeout=20)
+            resp = session.get(
+                LOAD_MORE_URL, headers=_LOAD_MORE_HEADERS, params=params, timeout=20
+            )
             resp.raise_for_status()
         except Exception as exc:
-            logger.warning("TheInvestor load-more failed at cursor %s: %s", last_news_id, exc)
+            logger.warning(
+                "TheInvestor load-more failed at cursor %s: %s", last_news_id, exc
+            )
             break
 
         if not resp.text.strip():
@@ -245,7 +264,11 @@ def _collect_stubs(max_articles: int = 200) -> list[dict]:
             new_count += 1
 
         next_cursor = page_stubs[-1].get("news_id")
-        if not isinstance(next_cursor, int) or next_cursor >= last_news_id or new_count == 0:
+        if (
+            not isinstance(next_cursor, int)
+            or next_cursor >= last_news_id
+            or new_count == 0
+        ):
             break
 
         last_news_id = next_cursor
@@ -306,16 +329,20 @@ class TheInvestorExtractor(NewsExtractor):
                     f"{article['news_content'] or ''} {haystack_extra}",
                 )
                 for ticker in matched:
-                    articles.append({
-                        "symbol": ticker["symbol"],
-                        "asset_id": ticker["asset_id"],
-                        "news_id": article["news_id"],
-                        "title": article["title"],
-                        "news_content": article["news_content"],
-                        "publish_date": article["publish_date"],
-                        "source": "theinvestor",
-                        "source_url": article["source_url"],
-                    })
+                    articles.append(
+                        {
+                            "symbol": ticker["symbol"],
+                            "asset_id": ticker["asset_id"],
+                            "news_id": article["news_id"],
+                            "title": article["title"],
+                            "news_content": article["news_content"],
+                            "publish_date": article["publish_date"],
+                            "source": "theinvestor",
+                            "source_url": article["source_url"],
+                        }
+                    )
 
-        logger.info("TheInvestorExtractor: produced %s ticker-matched records", len(articles))
+        logger.info(
+            "TheInvestorExtractor: produced %s ticker-matched records", len(articles)
+        )
         return articles
