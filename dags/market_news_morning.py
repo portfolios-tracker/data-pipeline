@@ -310,78 +310,72 @@ with DAG(
 
         max_retries = 3
 
-        # ── Batch embedding with incremental save (no waste) ──────────────────
-        for i in range(0, len(rows), BATCH):
-            batch_rows = rows[i : i + BATCH]
-            texts = [
-                f"{r['title']}. {r['news_content'] or ''}".strip() for r in batch_rows
-            ]
+        # ── Batch embedding with Gemini Batch API ───────────────────────────────
+        texts = [
+            f"{r['title']}. {truncate_text(r['news_content'] or '', 3000)}".strip() for r in rows
+        ]
 
-            for attempt in range(max_retries + 1):
-                try:
-                    result = client.models.embed_content(
-                        model=MODEL,
-                        contents=texts,
-                        config=types.EmbedContentConfig(
-                            task_type="RETRIEVAL_DOCUMENT",
-                            output_dimensionality=DIM,
-                        ),
-                    )
+        task_logger.info("Submitting embeddings batch job for %s articles...", len(texts))
+        
+        batch_job = client.batches.create_embeddings(
+            model=MODEL,
+            src=texts
+        )
+        task_logger.info("Batch job %s submitted.", batch_job.name)
 
-                    tuples = [
-                        (
-                            str(batch_rows[j]["asset_id"]),
-                            int(batch_rows[j]["news_id"]),
-                            _normalize(emb.values),
-                            "gemini-embedding-001-768d",
+        completed_states = {'JOB_STATE_SUCCEEDED', 'JOB_STATE_FAILED', 'JOB_STATE_CANCELLED', 'JOB_STATE_PAUSED'}
+        while batch_job.state.name not in completed_states:
+            time.sleep(30)
+            batch_job = client.batches.get(name=batch_job.name)
+            task_logger.info("Batch job status: %s", batch_job.state.name)
+
+        if batch_job.state.name != 'JOB_STATE_SUCCEEDED':
+            raise RuntimeError(f"Batch job failed: {batch_job.error}")
+
+        output_file_name = batch_job.dest.file_name
+        content_bytes = client.files.download(file=output_file_name)
+        
+        import json
+        lines = [line for line in content_bytes.decode('utf-8').split('\n') if line.strip()]
+        
+        tuples = []
+        for idx, line in enumerate(lines):
+            try:
+                res = json.loads(line)
+                values = res.get('response', {}).get('embeddings', [{}])[0].get('values', [])
+                if not values:
+                    continue
+                norm_values = _normalize(values)
+                tuples.append((
+                    str(rows[idx]["asset_id"]),
+                    int(rows[idx]["news_id"]),
+                    norm_values,
+                    "gemini-embedding-001-768d",
+                ))
+            except Exception as e:
+                task_logger.error(f"Failed to parse embedding line {idx}: {e}")
+
+        if tuples:
+            conn = psycopg2.connect(SUPABASE_DB_URL)
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO market_data.news_embeddings
+                                (asset_id, news_id, embedding, model_ver)
+                            VALUES %s
+                            ON CONFLICT (asset_id, news_id) DO UPDATE SET
+                                embedding   = EXCLUDED.embedding,
+                                model_ver   = EXCLUDED.model_ver,
+                                embedded_at = NOW()
+                            """,
+                            tuples,
                         )
-                        for j, emb in enumerate(result.embeddings)
-                    ]
-
-                    # Upsert into news_embeddings immediately
-                    conn = psycopg2.connect(SUPABASE_DB_URL)
-                    try:
-                        with conn:
-                            with conn.cursor() as cur:
-                                psycopg2.extras.execute_values(
-                                    cur,
-                                    """
-                                    INSERT INTO market_data.news_embeddings
-                                        (asset_id, news_id, embedding, model_ver)
-                                    VALUES %s
-                                    ON CONFLICT (asset_id, news_id) DO UPDATE SET
-                                        embedding   = EXCLUDED.embedding,
-                                        model_ver   = EXCLUDED.model_ver,
-                                        embedded_at = NOW()
-                                    """,
-                                    tuples,
-                                )
-                    finally:
-                        conn.close()
-
-                    task_logger.info(
-                        "Saved %s embeddings for batch starting at %s", len(tuples), i
-                    )
-                    break  # Break out of retry loop on success
-
-                except errors.APIError as e:
-                    if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries:
-                        wait = 5 * (2**attempt)
-                        task_logger.warning(
-                            "Rate limit hit on batch %s, sleeping %ss", i, wait
-                        )
-                        time.sleep(wait)
-                        continue
-                    else:
-                        task_logger.error(
-                            "Gemini API Error (batch starting at %s): %s", i, e
-                        )
-                        raise
-                except Exception as e:
-                    task_logger.error(
-                        "Unexpected error embedding batch starting at %s: %s", i, e
-                    )
-                    raise
+            finally:
+                conn.close()
+            task_logger.info("Saved %s embeddings.", len(tuples))
 
     # ── DAG orchestration ─────────────────────────────────────────────────────
     extract = extract_and_load_news()
