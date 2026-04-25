@@ -81,7 +81,13 @@ with DAG(
         ]
 
         client = genai.Client(api_key=api_key)
-        batch_job = client.batches.create_embeddings(model=MODEL, src=texts)
+        
+        # Format the src using the expected schema for embeddings batch job
+        # src expects a dictionary matching EmbeddingsBatchJobSourceDict
+        batch_job = client.batches.create_embeddings(
+            model=MODEL, 
+            src={"inlined_requests": {"contents": texts}}
+        )
         return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
 
     @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
