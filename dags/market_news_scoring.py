@@ -6,8 +6,8 @@ from datetime import timedelta
 import psycopg2
 import psycopg2.extras
 from airflow import DAG
-from airflow.decorators import task
-from airflow.sensors.base import PokeReturnValue
+from airflow.sdk import task
+from airflow.sdk.bases.sensor import PokeReturnValue
 
 from dags.etl_modules.gemini_helpers import (
     SUPABASE_DB_URL,

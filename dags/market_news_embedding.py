@@ -6,11 +6,15 @@ import numpy as np
 import psycopg2
 import psycopg2.extras
 from airflow import DAG
-from airflow.decorators import task
-from airflow.sensors.base import PokeReturnValue
+from airflow.sdk import task
+from airflow.sdk.bases.sensor import PokeReturnValue
 from pendulum import timezone
 
-from dags.etl_modules.gemini_helpers import SUPABASE_DB_URL, get_gemini_api_key, truncate_text
+from dags.etl_modules.gemini_helpers import (
+    SUPABASE_DB_URL,
+    get_gemini_api_key,
+    truncate_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +27,12 @@ default_args = {
 MODEL = "gemini-embedding-001"
 DIM = 768
 
+
 def _normalize(vec: list[float]) -> list[float]:
     arr = np.array(vec, dtype=np.float32)
     norm = np.linalg.norm(arr)
     return (arr / norm if norm > 0 else arr).tolist()
+
 
 with DAG(
     dag_id="market_news_embedding",
@@ -67,17 +73,17 @@ with DAG(
             return None
 
         texts = [
-            f"{r['title']}. {truncate_text(r['news_content'] or '', 3000)}".strip() for r in rows
+            f"{r['title']}. {truncate_text(r['news_content'] or '', 3000)}".strip()
+            for r in rows
         ]
 
         # Serialize identification data for reconstruction in processing task
-        id_mappings = [{"asset_id": str(r["asset_id"]), "news_id": int(r["news_id"])} for r in rows]
+        id_mappings = [
+            {"asset_id": str(r["asset_id"]), "news_id": int(r["news_id"])} for r in rows
+        ]
 
         client = genai.Client(api_key=api_key)
-        batch_job = client.batches.create_embeddings(
-            model=MODEL,
-            src=texts
-        )
+        batch_job = client.batches.create_embeddings(model=MODEL, src=texts)
         return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
 
     @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
@@ -89,12 +95,13 @@ with DAG(
         job_name = payload["job_name"]
 
         from google import genai
+
         client = genai.Client(api_key=get_gemini_api_key())
         batch_job = client.batches.get(name=job_name)
 
-        if batch_job.state.name == 'JOB_STATE_SUCCEEDED':
+        if batch_job.state.name == "JOB_STATE_SUCCEEDED":
             return PokeReturnValue(is_done=True, xcom_value=json.dumps(payload))
-        elif batch_job.state.name in ['JOB_STATE_FAILED', 'JOB_STATE_CANCELLED']:
+        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
         return PokeReturnValue(is_done=False)
@@ -109,6 +116,7 @@ with DAG(
         mappings = payload["mappings"]
 
         from google import genai
+
         client = genai.Client(api_key=get_gemini_api_key())
         batch_job = client.batches.get(name=job_name)
 
@@ -122,12 +130,14 @@ with DAG(
                     norm_values = _normalize(values)
 
                     m = mappings[idx]
-                    tuples.append((
-                        m["asset_id"],
-                        m["news_id"],
-                        norm_values,
-                        "gemini-embedding-001-768d",
-                    ))
+                    tuples.append(
+                        (
+                            m["asset_id"],
+                            m["news_id"],
+                            norm_values,
+                            "gemini-embedding-001-768d",
+                        )
+                    )
                 except Exception as e:
                     logger.error(f"Failed to parse embedding line {idx}: {e}")
 

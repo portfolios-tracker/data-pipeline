@@ -6,8 +6,8 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 from airflow import DAG
-from airflow.decorators import task
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.sdk import task
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import timezone
 
 from dags.etl_modules.extractors import run_all_extractors
@@ -99,7 +99,7 @@ with DAG(
         logger.info("extract_and_load_news: complete")
 
     extract = extract_and_load_news()
-    
+
     trigger_scoring = TriggerDagRunOperator(
         task_id="trigger_scoring",
         trigger_dag_id="market_news_scoring",
