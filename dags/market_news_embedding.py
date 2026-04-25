@@ -61,6 +61,7 @@ with DAG(
                         ON n.asset_id = e.asset_id
                         AND n.news_id = e.news_id
                     WHERE e.news_id IS NULL
+                    LIMIT 500
                     """,
                 )
                 rows = cur.fetchall()
