@@ -14,6 +14,7 @@ from dags.etl_modules.gemini_helpers import (
     SUPABASE_DB_URL,
     get_gemini_api_key,
     truncate_text,
+    chunk_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,12 +58,12 @@ with DAG(
                     """
                     SELECT n.asset_id, n.news_id, n.title, n.news_content
                     FROM market_data.news n
-                    LEFT JOIN market_data.news_embeddings e
-                        ON n.asset_id = e.asset_id
-                        AND n.news_id = e.news_id
-                    WHERE e.news_id IS NULL
-                    LIMIT 500
-                    """,
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM market_data.news_embeddings e
+                        WHERE e.asset_id = n.asset_id AND e.news_id = n.news_id
+                    )
+                    LIMIT 200
+                    """
                 )
                 rows = cur.fetchall()
         finally:
@@ -71,23 +72,30 @@ with DAG(
         if not rows:
             return None
 
-        texts = [
-            f"{r['title']}. {truncate_text(r['news_content'] or '', 3000)}".strip()
-            for r in rows
-        ]
+        texts_to_embed = []
+        id_mappings = []
 
-        # Serialize identification data for reconstruction in processing task
-        id_mappings = [
-            {"asset_id": str(r["asset_id"]), "news_id": int(r["news_id"])} for r in rows
-        ]
+        for r in rows:
+            full_text = f"{r['title']}. {r['news_content'] or ''}".strip()
+            # 4000 chars is ~800 words, safely under the 2048 token limit
+            chunks = chunk_text(full_text, chunk_size=4000, chunk_overlap=500)
+
+            for i, chunk in enumerate(chunks):
+                texts_to_embed.append(chunk)
+                id_mappings.append(
+                    {
+                        "asset_id": str(r["asset_id"]),
+                        "news_id": int(r["news_id"]),
+                        "chunk_index": i,
+                    }
+                )
 
         client = genai.Client(api_key=api_key)
-        
+
         # Format the src using the expected schema for embeddings batch job
         # src expects a dictionary matching EmbeddingsBatchJobSourceDict
         batch_job = client.batches.create_embeddings(
-            model=MODEL, 
-            src={"inlined_requests": {"contents": texts}}
+            model=MODEL, src={"inlined_requests": {"contents": texts_to_embed}}
         )
         return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
 
@@ -139,6 +147,7 @@ with DAG(
                         (
                             m["asset_id"],
                             m["news_id"],
+                            m["chunk_index"],
                             norm_values,
                             "gemini-embedding-001-768d",
                         )
@@ -155,9 +164,9 @@ with DAG(
                             cur,
                             """
                             INSERT INTO market_data.news_embeddings
-                                (asset_id, news_id, embedding, model_ver)
+                                (asset_id, news_id, chunk_index, embedding, model_ver)
                             VALUES %s
-                            ON CONFLICT (asset_id, news_id) DO UPDATE SET
+                            ON CONFLICT (asset_id, news_id, chunk_index) DO UPDATE SET
                                 embedding   = EXCLUDED.embedding,
                                 model_ver   = EXCLUDED.model_ver,
                                 embedded_at = NOW()
