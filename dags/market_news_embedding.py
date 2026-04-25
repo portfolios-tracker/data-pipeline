@@ -26,7 +26,7 @@ default_args = {
 }
 
 MODEL = "gemini-embedding-001"
-DIM = 768
+DIM = 3072
 
 
 def _normalize(vec: list[float]) -> list[float]:
@@ -150,7 +150,7 @@ with DAG(
                             m["news_id"],
                             m["chunk_index"],
                             norm_values,
-                            "gemini-embedding-001-768d",
+                            "gemini-embedding-001-3072d",
                         )
                     )
                 except Exception as e:
