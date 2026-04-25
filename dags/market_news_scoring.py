@@ -8,9 +8,12 @@ import psycopg2.extras
 from airflow import DAG
 from airflow.decorators import task
 from airflow.sensors.base import PokeReturnValue
-from pendulum import timezone
 
-from dags.etl_modules.gemini_helpers import SUPABASE_DB_URL, get_gemini_api_key, truncate_text
+from dags.etl_modules.gemini_helpers import (
+    SUPABASE_DB_URL,
+    get_gemini_api_key,
+    truncate_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +68,17 @@ with DAG(
 
             # Use news_id as custom ID in the userMetadata if possible, or just rely on order.
             # We will return the list of IDs to XCom so the downstream task can map them safely.
-            inline_requests.append({
-                "contents": [{"parts": [{"text": prompt}]}],
-            })
+            inline_requests.append(
+                {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                }
+            )
 
-        news_ids = [item['news_id'] for item in data]
+        news_ids = [item["news_id"] for item in data]
 
         client = genai.Client(api_key=api_key)
         batch_job = client.batches.create(
-            model="gemini-2.0-flash",
-            src=inline_requests
+            model="gemini-2.5-flash-lite", src=inline_requests
         )
         logger.info(f"Submitted batch job {batch_job.name}")
 
@@ -91,14 +95,15 @@ with DAG(
         job_name = payload["job_name"]
 
         from google import genai
+
         client = genai.Client(api_key=get_gemini_api_key())
         batch_job = client.batches.get(name=job_name)
 
         logger.info(f"Batch job status: {batch_job.state.name}")
 
-        if batch_job.state.name == 'JOB_STATE_SUCCEEDED':
+        if batch_job.state.name == "JOB_STATE_SUCCEEDED":
             return PokeReturnValue(is_done=True, xcom_value=json.dumps(payload))
-        elif batch_job.state.name in ['JOB_STATE_FAILED', 'JOB_STATE_CANCELLED']:
+        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
         return PokeReturnValue(is_done=False)
@@ -114,6 +119,7 @@ with DAG(
         news_ids = payload["news_ids"]
 
         from google import genai
+
         client = genai.Client(api_key=get_gemini_api_key())
         batch_job = client.batches.get(name=job_name)
 
@@ -122,7 +128,7 @@ with DAG(
             for idx, resp in enumerate(batch_job.dest.inlined_responses):
                 try:
                     response_text = resp.response.candidates[0].content.parts[0].text
-                    match = re.search(r'-?\d+\.\d+|-?\d+', response_text)
+                    match = re.search(r"-?\d+\.\d+|-?\d+", response_text)
                     score = float(match.group()) if match else 0.0
                     sentiment_score = max(-1.0, min(1.0, score))
 
