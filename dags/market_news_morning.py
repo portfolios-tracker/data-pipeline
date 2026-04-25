@@ -191,28 +191,23 @@ with DAG(
         if batch_job.state.name != 'JOB_STATE_SUCCEEDED':
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
-        output_file_name = batch_job.dest.file_name
-        content_bytes = client.files.download(file=output_file_name)
-        
-        import json
         batch_updates = []
-        lines = [line for line in content_bytes.decode('utf-8').split('\n') if line.strip()]
-        
-        for idx, line in enumerate(lines):
-            try:
-                res = json.loads(line)
-                response_text = res.get('response', {}).get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '0.0')
-                import re as regex
-                match = regex.search(r'-?\d+\.\d+|-?\d+', response_text)
-                score = float(match.group()) if match else 0.0
-                sentiment_score = max(-1.0, min(1.0, score))
-                
-                news_id = data[idx]['news_id']
-                batch_updates.append((sentiment_score, news_id))
-            except Exception as e:
-                task_logger.error(f"Failed to parse line {idx}: {e}")
-                batch_updates.append((0.0, data[idx]['news_id']))
-
+        if batch_job.dest.inlined_responses:
+            for idx, resp in enumerate(batch_job.dest.inlined_responses):
+                try:
+                    response_text = resp.response.candidates[0].content.parts[0].text
+                    import re as regex
+                    match = regex.search(r'-?\d+\.\d+|-?\d+', response_text)
+                    score = float(match.group()) if match else 0.0
+                    sentiment_score = max(-1.0, min(1.0, score))
+                    news_id = data[idx]['news_id']
+                    batch_updates.append((sentiment_score, news_id))
+                except Exception as e:
+                    task_logger.error(f"Failed to parse inline response {idx}: {e}")
+                    batch_updates.append((0.0, data[idx]['news_id']))
+        else:
+            task_logger.warning("No inlined_responses found in job destination.")
+            
         if batch_updates:
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
@@ -332,29 +327,25 @@ with DAG(
         if batch_job.state.name != 'JOB_STATE_SUCCEEDED':
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
-        output_file_name = batch_job.dest.file_name
-        content_bytes = client.files.download(file=output_file_name)
-        
-        import json
-        lines = [line for line in content_bytes.decode('utf-8').split('\n') if line.strip()]
-        
         tuples = []
-        for idx, line in enumerate(lines):
-            try:
-                res = json.loads(line)
-                values = res.get('response', {}).get('embeddings', [{}])[0].get('values', [])
-                if not values:
-                    continue
-                norm_values = _normalize(values)
-                tuples.append((
-                    str(rows[idx]["asset_id"]),
-                    int(rows[idx]["news_id"]),
-                    norm_values,
-                    "gemini-embedding-001-768d",
-                ))
-            except Exception as e:
-                task_logger.error(f"Failed to parse embedding line {idx}: {e}")
-
+        if batch_job.dest.inlined_embed_content_responses:
+            for idx, resp in enumerate(batch_job.dest.inlined_embed_content_responses):
+                try:
+                    values = resp.response.embeddings[0].values
+                    if not values:
+                        continue
+                    norm_values = _normalize(values)
+                    tuples.append((
+                        str(rows[idx]["asset_id"]),
+                        int(rows[idx]["news_id"]),
+                        norm_values,
+                        "gemini-embedding-001-768d",
+                    ))
+                except Exception as e:
+                    task_logger.error(f"Failed to parse embedding inline response {idx}: {e}")
+        else:
+            task_logger.warning("No inlined_embed_content_responses found in job destination.")
+            
         if tuples:
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
