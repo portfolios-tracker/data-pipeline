@@ -25,9 +25,10 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-# gemini-embedding-2 is the latest model and supports Matryoshka embeddings.
-# It returns 3072 dimensions by default, but we slice it to 768 for HNSW indexing performance.
-MODEL = "models/gemini-embedding-2"
+# gemini-embedding-001 is the stable production model.
+# Although documented as 768d, it often returns 3072d in the Developer API.
+# We slice and re-normalize to 768d to fit the Postgres HNSW index limit (2000).
+MODEL = "models/gemini-embedding-001"
 TARGET_DIM = 768
 
 
@@ -94,7 +95,7 @@ with DAG(
 
         client = genai.Client(api_key=api_key)
 
-        # Batch create using the high-fidelity embedding-2 model
+        # Batch create using the stable gemini-embedding-001 model
         batch_job = client.batches.create_embeddings(
             model=MODEL, src={"inlined_requests": {"contents": texts_to_embed}}
         )
@@ -143,8 +144,8 @@ with DAG(
                     if not full_values:
                         continue
 
-                    # Slice to TARGET_DIM (768) and re-normalize.
-                    # Matryoshka embeddings are designed to be sliced like this.
+                    # Slice to TARGET_DIM (768) if necessary and re-normalize.
+                    # This ensures compatibility with pgvector's HNSW limit (2000).
                     sliced_values = full_values[:TARGET_DIM]
                     norm_values = _normalize(sliced_values)
 
@@ -155,7 +156,7 @@ with DAG(
                             m["news_id"],
                             m["chunk_index"],
                             norm_values,
-                            f"gemini-embedding-2-{TARGET_DIM}d",
+                            f"gemini-001-{TARGET_DIM}d",
                         )
                     )
                 except Exception as e:
