@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 import numpy as np
 import psycopg2
@@ -60,10 +60,8 @@ with DAG(
                     LEFT JOIN market_data.news_embeddings e
                         ON n.asset_id = e.asset_id
                         AND n.news_id = e.news_id
-                    WHERE n.publish_date::date = %s
-                      AND e.news_id IS NULL
+                    WHERE e.news_id IS NULL
                     """,
-                    (date.today(),),
                 )
                 rows = cur.fetchall()
         finally:
