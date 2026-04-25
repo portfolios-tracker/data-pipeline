@@ -26,8 +26,7 @@ default_args = {
 }
 
 # gemini-embedding-001 is the stable production model.
-# Although documented as 768d, it often returns 3072d in the Developer API.
-# We slice and re-normalize to 768d to fit the Postgres HNSW index limit (2000).
+# We request 768 dimensions directly from the API using Matryoshka Representation Learning (MRL).
 MODEL = "models/gemini-embedding-001"
 TARGET_DIM = 768
 
@@ -80,8 +79,8 @@ with DAG(
 
         for r in rows:
             full_text = f"{r['title']}. {r['news_content'] or ''}".strip()
-            # 4000 chars is ~800 words, safely under the 2048 token limit
-            chunks = chunk_text(full_text, chunk_size=4000, chunk_overlap=500)
+            # 4000 chars / 800 overlap (~150 words) for financial context retention
+            chunks = chunk_text(full_text, chunk_size=4000, chunk_overlap=800)
 
             for i, chunk in enumerate(chunks):
                 texts_to_embed.append(chunk)
@@ -95,9 +94,19 @@ with DAG(
 
         client = genai.Client(api_key=api_key)
 
-        # Batch create using the stable gemini-embedding-001 model
+        # Batch create using stable 001 model with direct 768d MRL output.
+        # This reduces network payload and ensures pgvector compatibility.
         batch_job = client.batches.create_embeddings(
-            model=MODEL, src={"inlined_requests": {"contents": texts_to_embed}}
+            model=MODEL,
+            src={
+                "inlined_requests": {
+                    "contents": texts_to_embed,
+                    "config": {
+                        "output_dimensionality": TARGET_DIM,
+                        "task_type": "RETRIEVAL_DOCUMENT",
+                    },
+                }
+            },
         )
         return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
 
@@ -139,15 +148,14 @@ with DAG(
         if batch_job.dest.inlined_embed_content_responses:
             for idx, resp in enumerate(batch_job.dest.inlined_embed_content_responses):
                 try:
-                    # SingleEmbedContentResponse has a single 'embedding' attribute
-                    full_values = resp.response.embedding.values
-                    if not full_values:
+                    # Accessing single 'embedding' attribute as confirmed by SDK inspection
+                    values = resp.response.embedding.values
+                    if not values:
                         continue
 
-                    # Slice to TARGET_DIM (768) if necessary and re-normalize.
-                    # This ensures compatibility with pgvector's HNSW limit (2000).
-                    sliced_values = full_values[:TARGET_DIM]
-                    norm_values = _normalize(sliced_values)
+                    # API already returns TARGET_DIM (768) and normalizes for RETRIEVAL_DOCUMENT.
+                    # We re-normalize just for floating point safety.
+                    norm_values = _normalize(values)
 
                     m = mappings[idx]
                     tuples.append(
