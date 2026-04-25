@@ -46,10 +46,11 @@ with DAG(
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT news_id, max(title) as title, max(news_content) as description
+                    SELECT asset_id, news_id, title, news_content as description
                     FROM market_data.news
                     WHERE sentiment_score IS NULL
-                    GROUP BY news_id
+                    ORDER BY publish_date DESC
+                    LIMIT 500
                     """
                 )
                 data = cur.fetchall()
@@ -74,7 +75,10 @@ with DAG(
                 }
             )
 
-        news_ids = [item["news_id"] for item in data]
+        mappings = [
+            {"asset_id": str(item["asset_id"]), "news_id": item["news_id"]}
+            for item in data
+        ]
 
         client = genai.Client(api_key=api_key)
         batch_job = client.batches.create(
@@ -83,9 +87,9 @@ with DAG(
         logger.info(f"Submitted batch job {batch_job.name}")
 
         # We need both the job_name and the ordered news_ids for processing
-        return json.dumps({"job_name": batch_job.name, "news_ids": news_ids})
+        return json.dumps({"job_name": batch_job.name, "mappings": mappings})
 
-    @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+    @task.sensor(poke_interval=120, timeout=7200, mode="reschedule")
     def wait_for_score_batch(job_payload: str | None) -> PokeReturnValue:
         """Polls the batch job state, freeing the worker slot in between pokes."""
         if not job_payload:
@@ -116,7 +120,7 @@ with DAG(
 
         payload = json.loads(job_payload)
         job_name = payload["job_name"]
-        news_ids = payload["news_ids"]
+        mappings = payload["mappings"]
 
         from google import genai
 
@@ -132,10 +136,12 @@ with DAG(
                     score = float(match.group()) if match else 0.0
                     sentiment_score = max(-1.0, min(1.0, score))
 
-                    batch_updates.append((sentiment_score, news_ids[idx]))
+                    m = mappings[idx]
+                    batch_updates.append((sentiment_score, m["asset_id"], m["news_id"]))
                 except Exception as e:
                     logger.error(f"Failed to parse line {idx}: {e}")
-                    batch_updates.append((0.0, news_ids[idx]))
+                    m = mappings[idx]
+                    batch_updates.append((0.0, m["asset_id"], m["news_id"]))
 
         if batch_updates:
             conn = psycopg2.connect(SUPABASE_DB_URL)
@@ -147,8 +153,9 @@ with DAG(
                             """
                             UPDATE market_data.news AS n
                             SET sentiment_score = v.sentiment_score
-                            FROM (VALUES %s) AS v(sentiment_score, news_id)
-                            WHERE n.news_id = v.news_id
+                            FROM (VALUES %s) AS v(sentiment_score, asset_id, news_id)
+                            WHERE n.asset_id = v.asset_id::uuid
+                              AND n.news_id = v.news_id::bigint
                             """,
                             batch_updates,
                         )
