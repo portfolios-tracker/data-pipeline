@@ -25,8 +25,10 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-MODEL = "gemini-embedding-001"
-DIM = 3072
+# gemini-embedding-2 is the latest model and supports Matryoshka embeddings.
+# It returns 3072 dimensions by default, but we slice it to 768 for HNSW indexing performance.
+MODEL = "models/gemini-embedding-2"
+TARGET_DIM = 768
 
 
 def _normalize(vec: list[float]) -> list[float]:
@@ -92,8 +94,7 @@ with DAG(
 
         client = genai.Client(api_key=api_key)
 
-        # Format the src using the expected schema for embeddings batch job
-        # src expects a dictionary matching EmbeddingsBatchJobSourceDict
+        # Batch create using the high-fidelity embedding-2 model
         batch_job = client.batches.create_embeddings(
             model=MODEL, src={"inlined_requests": {"contents": texts_to_embed}}
         )
@@ -137,11 +138,15 @@ with DAG(
         if batch_job.dest.inlined_embed_content_responses:
             for idx, resp in enumerate(batch_job.dest.inlined_embed_content_responses):
                 try:
-                    # SingleEmbedContentResponse has a single 'embedding' attribute, not a list of 'embeddings'
-                    values = resp.response.embedding.values
-                    if not values:
+                    # SingleEmbedContentResponse has a single 'embedding' attribute
+                    full_values = resp.response.embedding.values
+                    if not full_values:
                         continue
-                    norm_values = _normalize(values)
+
+                    # Slice to TARGET_DIM (768) and re-normalize.
+                    # Matryoshka embeddings are designed to be sliced like this.
+                    sliced_values = full_values[:TARGET_DIM]
+                    norm_values = _normalize(sliced_values)
 
                     m = mappings[idx]
                     tuples.append(
@@ -150,7 +155,7 @@ with DAG(
                             m["news_id"],
                             m["chunk_index"],
                             norm_values,
-                            "gemini-embedding-001-3072d",
+                            f"gemini-embedding-2-{TARGET_DIM}d",
                         )
                     )
                 except Exception as e:
