@@ -137,7 +137,8 @@ with DAG(
         if batch_job.dest.inlined_embed_content_responses:
             for idx, resp in enumerate(batch_job.dest.inlined_embed_content_responses):
                 try:
-                    values = resp.response.embeddings[0].values
+                    # SingleEmbedContentResponse has a single 'embedding' attribute, not a list of 'embeddings'
+                    values = resp.response.embedding.values
                     if not values:
                         continue
                     norm_values = _normalize(values)
