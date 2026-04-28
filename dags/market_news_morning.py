@@ -3,8 +3,8 @@ import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.sdk import task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.sdk import task
 from pendulum import timezone
 
 from dags.etl_modules.notifications import (
@@ -43,6 +43,7 @@ with DAG(
         import pandas as pd
         import psycopg2
         import psycopg2.extras
+
         from dags.etl_modules.extractors import run_all_extractors
         from dags.etl_modules.fetcher import get_active_vn_stock_tickers
 

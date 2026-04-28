@@ -5,7 +5,8 @@ Extractor factory — runs all registered extractors concurrently.
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from dags.etl_modules.extractors.bizhub import BizhubExtractor
 from dags.etl_modules.extractors.kbs import KBSNewsExtractor
@@ -14,7 +15,7 @@ from dags.etl_modules.extractors.vci import VCINewsExtractor
 
 logger = logging.getLogger(__name__)
 
-TICKER_LINKED_EXTRACTOR_CLASSES = [VCINewsExtractor, KBSNewsExtractor]
+TICKER_LINKED_EXTRACTOR_CLASSES = []
 SCRAPED_EXTRACTOR_CLASSES = [BizhubExtractor, TheInvestorExtractor]
 EXTRACTOR_TIMEOUT_SECS = 1800
 
@@ -54,7 +55,8 @@ def run_all_extractors(tickers: list[dict]) -> tuple[list[dict], list[dict]]:
             except FuturesTimeoutError:
                 logger.warning(
                     "%s timed out after %ss — skipping",
-                    cls.__name__, EXTRACTOR_TIMEOUT_SECS
+                    cls.__name__,
+                    EXTRACTOR_TIMEOUT_SECS,
                 )
 
     if not ticker_linked_results and not scraped_results:
