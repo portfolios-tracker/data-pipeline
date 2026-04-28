@@ -199,5 +199,3 @@ with DAG(
     job_payload = submit_embed_batch()
     wait_payload = wait_for_embed_batch(job_payload)
     process_embed_batch(wait_payload)
-    wait_payload = wait_for_embed_batch(job_payload)
-    process_embed_batch(wait_payload)
