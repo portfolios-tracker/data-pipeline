@@ -64,6 +64,8 @@ with DAG(
                         SELECT 1 FROM market_data.news_embeddings e
                         WHERE e.asset_id = n.asset_id AND e.news_id = n.news_id
                     )
+                      AND n.source_type = 'ticker_linked'
+                      AND n.asset_id IS NOT NULL
                     LIMIT 200
                     """
                 )

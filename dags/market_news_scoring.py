@@ -46,7 +46,7 @@ with DAG(
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT asset_id, news_id, title, news_content as description
+                    SELECT asset_id, news_id, source_type, title, news_content as description
                     FROM market_data.news
                     WHERE sentiment_score IS NULL
                     ORDER BY publish_date DESC
@@ -76,7 +76,11 @@ with DAG(
             )
 
         mappings = [
-            {"asset_id": str(item["asset_id"]), "news_id": item["news_id"]}
+            {
+                "asset_id": str(item["asset_id"]) if item.get("asset_id") is not None else None,
+                "news_id": item["news_id"],
+                "source_type": str(item.get("source_type") or "scraped"),
+            }
             for item in data
         ]
 
@@ -127,7 +131,8 @@ with DAG(
         client = genai.Client(api_key=get_gemini_api_key())
         batch_job = client.batches.get(name=job_name)
 
-        batch_updates = []
+        ticker_linked_updates = []
+        scraped_updates = []
         if batch_job.dest.inlined_responses:
             for idx, resp in enumerate(batch_job.dest.inlined_responses):
                 try:
@@ -137,31 +142,55 @@ with DAG(
                     sentiment_score = max(-1.0, min(1.0, score))
 
                     m = mappings[idx]
-                    batch_updates.append((sentiment_score, m["asset_id"], m["news_id"]))
+                    if m["source_type"] == "ticker_linked" and m["asset_id"]:
+                        ticker_linked_updates.append((sentiment_score, m["asset_id"], m["news_id"]))
+                    else:
+                        scraped_updates.append((sentiment_score, m["news_id"]))
                 except Exception as e:
                     logger.error(f"Failed to parse line {idx}: {e}")
                     m = mappings[idx]
-                    batch_updates.append((0.0, m["asset_id"], m["news_id"]))
+                    if m["source_type"] == "ticker_linked" and m["asset_id"]:
+                        ticker_linked_updates.append((0.0, m["asset_id"], m["news_id"]))
+                    else:
+                        scraped_updates.append((0.0, m["news_id"]))
 
-        if batch_updates:
+        if ticker_linked_updates or scraped_updates:
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
                 with conn:
                     with conn.cursor() as cur:
-                        psycopg2.extras.execute_values(
-                            cur,
-                            """
-                            UPDATE market_data.news AS n
-                            SET sentiment_score = v.sentiment_score
-                            FROM (VALUES %s) AS v(sentiment_score, asset_id, news_id)
-                            WHERE n.asset_id = v.asset_id::uuid
-                              AND n.news_id = v.news_id::bigint
-                            """,
-                            batch_updates,
-                        )
+                        if ticker_linked_updates:
+                            psycopg2.extras.execute_values(
+                                cur,
+                                """
+                                UPDATE market_data.news AS n
+                                SET sentiment_score = v.sentiment_score
+                                FROM (VALUES %s) AS v(sentiment_score, asset_id, news_id)
+                                WHERE n.source_type = 'ticker_linked'
+                                  AND n.asset_id = v.asset_id::uuid
+                                  AND n.news_id = v.news_id::bigint
+                                """,
+                                ticker_linked_updates,
+                            )
+                        if scraped_updates:
+                            psycopg2.extras.execute_values(
+                                cur,
+                                """
+                                UPDATE market_data.news AS n
+                                SET sentiment_score = v.sentiment_score
+                                FROM (VALUES %s) AS v(sentiment_score, news_id)
+                                WHERE n.source_type = 'scraped'
+                                  AND n.news_id = v.news_id::bigint
+                                """,
+                                scraped_updates,
+                            )
             finally:
                 conn.close()
-            logger.info(f"Saved sentiment scores for {len(batch_updates)} news items.")
+            logger.info(
+                "Saved sentiment scores for ticker_linked=%s scraped=%s items.",
+                len(ticker_linked_updates),
+                len(scraped_updates),
+            )
 
     # Orchestration
     job_payload = submit_score_batch()

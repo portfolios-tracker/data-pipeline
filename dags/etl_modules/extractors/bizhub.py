@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
-from dags.etl_modules.extractors.base import NewsExtractor
+from dags.etl_modules.extractors.base_scraped import ScrapedExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,7 @@ def _fetch_article(stub: dict) -> dict | None:
     }
 
 
-class BizhubExtractor(NewsExtractor):
+class BizhubExtractor(ScrapedExtractor):
     def extract(self) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -331,24 +331,19 @@ class BizhubExtractor(NewsExtractor):
                 if article is None:
                     continue
 
-                matched = self._match_tickers(
-                    article["title"], article["news_content"] or ""
+                articles.append(
+                    {
+                        "news_id": article["news_id"],
+                        "title": article["title"],
+                        "news_content": article["news_content"],
+                        "publish_date": article["publish_date"],
+                        "source": "bizhub",
+                        "source_url": article["source_url"],
+                        "source_type": "scraped",
+                    }
                 )
-                for ticker in matched:
-                    articles.append(
-                        {
-                            "symbol": ticker["symbol"],
-                            "asset_id": ticker["asset_id"],
-                            "news_id": article["news_id"],
-                            "title": article["title"],
-                            "news_content": article["news_content"],
-                            "publish_date": article["publish_date"],
-                            "source": "bizhub",
-                            "source_url": article["source_url"],
-                        }
-                    )
 
         logger.info(
-            "BizhubExtractor: produced %s ticker-matched records", len(articles)
+            "BizhubExtractor: produced %s scraped records", len(articles)
         )
         return articles

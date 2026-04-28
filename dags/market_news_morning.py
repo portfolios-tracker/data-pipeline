@@ -11,6 +11,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from pendulum import timezone
 
 from dags.etl_modules.extractors import run_all_extractors
+from dags.etl_modules.fetcher import get_active_vn_stock_tickers
 from dags.etl_modules.notifications import (
     send_failure_notification,
     send_success_notification,
@@ -44,19 +45,22 @@ with DAG(
         """
         Extract news from all sources and load them directly into the database.
         """
-        data = run_all_extractors()
+        tickers = get_active_vn_stock_tickers(raise_on_fallback=True)
+        ticker_linked_rows, scraped_rows = run_all_extractors(tickers=tickers)
         logger.info(
-            "extract_and_load_news: %s records extracted from all sources", len(data)
+            "extract_and_load_news: ticker_linked=%s scraped=%s",
+            len(ticker_linked_rows),
+            len(scraped_rows),
         )
 
-        if not data:
+        if not ticker_linked_rows and not scraped_rows:
             logger.info("No news to load.")
             return
 
         if not SUPABASE_DB_URL:
             raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
 
-        cols = [
+        ticker_cols = [
             "asset_id",
             "news_id",
             "publish_date",
@@ -64,35 +68,79 @@ with DAG(
             "news_content",
             "source",
             "source_url",
+            "source_type",
         ]
-        tuples = []
-        for row in data:
+        ticker_tuples = []
+        for row in ticker_linked_rows:
             if row.get("publish_date"):
                 row["publish_date"] = pd.to_datetime(row["publish_date"])
-            tuples.append([row.get(c) for c in cols])
+            ticker_tuples.append([row.get(c) for c in ticker_cols])
+
+        scraped_cols = [
+            "news_id",
+            "publish_date",
+            "title",
+            "news_content",
+            "source",
+            "source_url",
+            "source_type",
+        ]
+        scraped_tuples = []
+        for row in scraped_rows:
+            if row.get("publish_date"):
+                row["publish_date"] = pd.to_datetime(row["publish_date"])
+            scraped_tuples.append([row.get(c) for c in scraped_cols])
 
         logger.info(
-            "extract_and_load_news: inserting %s rows into market_data.news",
-            len(tuples),
+            "extract_and_load_news: upserting ticker_linked=%s scraped=%s rows",
+            len(ticker_tuples),
+            len(scraped_tuples),
         )
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
             with conn:
                 with conn.cursor() as cur:
-                    psycopg2.extras.execute_values(
-                        cur,
-                        """
-                        INSERT INTO market_data.news
-                            (asset_id, news_id, publish_date, title,
-                             news_content, source, source_url)
-                        VALUES %s
-                        ON CONFLICT (asset_id, news_id) DO UPDATE SET
-                            title           = EXCLUDED.title,
-                            news_content    = EXCLUDED.news_content,
-                            ingested_at     = NOW()
-                        """,
-                        tuples,
-                    )
+                    if ticker_tuples:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO market_data.news
+                                (asset_id, news_id, publish_date, title,
+                                 news_content, source, source_url, source_type)
+                            VALUES %s
+                            ON CONFLICT (asset_id, news_id)
+                            WHERE source_type = 'ticker_linked'
+                            DO UPDATE SET
+                                title        = EXCLUDED.title,
+                                news_content = EXCLUDED.news_content,
+                                source       = EXCLUDED.source,
+                                source_url   = EXCLUDED.source_url,
+                                publish_date = EXCLUDED.publish_date,
+                                ingested_at  = NOW()
+                            """,
+                            ticker_tuples,
+                        )
+
+                    if scraped_tuples:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO market_data.news
+                                (news_id, publish_date, title, news_content,
+                                 source, source_url, source_type)
+                            VALUES %s
+                            ON CONFLICT (news_id)
+                            WHERE source_type = 'scraped'
+                            DO UPDATE SET
+                                title        = EXCLUDED.title,
+                                news_content = EXCLUDED.news_content,
+                                source       = EXCLUDED.source,
+                                source_url   = EXCLUDED.source_url,
+                                publish_date = EXCLUDED.publish_date,
+                                ingested_at  = NOW()
+                            """,
+                            scraped_tuples,
+                        )
         finally:
             conn.close()
 

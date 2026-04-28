@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
-from dags.etl_modules.extractors.base import NewsExtractor
+from dags.etl_modules.extractors.base_scraped import ScrapedExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +304,7 @@ def _fetch_article(stub: dict) -> dict | None:
     }
 
 
-class TheInvestorExtractor(NewsExtractor):
+class TheInvestorExtractor(ScrapedExtractor):
     def extract(self) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -323,26 +323,19 @@ class TheInvestorExtractor(NewsExtractor):
                 if article is None:
                     continue
 
-                haystack_extra = " ".join(article.get("tags", []))
-                matched = self._match_tickers(
-                    article["title"],
-                    f"{article['news_content'] or ''} {haystack_extra}",
+                articles.append(
+                    {
+                        "news_id": article["news_id"],
+                        "title": article["title"],
+                        "news_content": article["news_content"],
+                        "publish_date": article["publish_date"],
+                        "source": "theinvestor",
+                        "source_url": article["source_url"],
+                        "source_type": "scraped",
+                    }
                 )
-                for ticker in matched:
-                    articles.append(
-                        {
-                            "symbol": ticker["symbol"],
-                            "asset_id": ticker["asset_id"],
-                            "news_id": article["news_id"],
-                            "title": article["title"],
-                            "news_content": article["news_content"],
-                            "publish_date": article["publish_date"],
-                            "source": "theinvestor",
-                            "source_url": article["source_url"],
-                        }
-                    )
 
         logger.info(
-            "TheInvestorExtractor: produced %s ticker-matched records", len(articles)
+            "TheInvestorExtractor: produced %s scraped records", len(articles)
         )
         return articles
