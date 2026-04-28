@@ -59,14 +59,14 @@ with DAG(
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT n.asset_id, n.news_id, n.title, n.news_content
+                    SELECT n.id as news_row_id, n.title, n.news_content
                     FROM market_data.news n
                     WHERE NOT EXISTS (
                         SELECT 1 FROM market_data.news_embeddings e
-                        WHERE e.asset_id = n.asset_id AND e.news_id = n.news_id
+                        WHERE e.news_row_id = n.id
                     )
-                      AND n.source_type = 'ticker_linked'
-                      AND n.asset_id IS NOT NULL
+                      AND n.news_content IS NOT NULL 
+                      AND trim(n.news_content) != ''
                     LIMIT 200
                     """
                 )
@@ -89,8 +89,7 @@ with DAG(
                 texts_to_embed.append(chunk)
                 id_mappings.append(
                     {
-                        "asset_id": str(r["asset_id"]),
-                        "news_id": int(r["news_id"]),
+                        "news_row_id": str(r["news_row_id"]),
                         "chunk_index": i,
                     }
                 )
@@ -128,7 +127,7 @@ with DAG(
 
         if batch_job.state.name == "JOB_STATE_SUCCEEDED":
             return PokeReturnValue(is_done=True, xcom_value=json.dumps(payload))
-        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:\
+        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
         return PokeReturnValue(is_done=False)
@@ -163,8 +162,7 @@ with DAG(
                     m = mappings[idx]
                     tuples.append(
                         (
-                            m["asset_id"],
-                            m["news_id"],
+                            m["news_row_id"],
                             m["chunk_index"],
                             norm_values,
                             f"gemini-001-{TARGET_DIM}d",
@@ -185,9 +183,9 @@ with DAG(
                             cur,
                             """
                             INSERT INTO market_data.news_embeddings
-                                (asset_id, news_id, chunk_index, embedding, model_ver)
+                                (news_row_id, chunk_index, embedding, model_ver)
                             VALUES %s
-                            ON CONFLICT (asset_id, news_id, chunk_index) DO UPDATE SET
+                            ON CONFLICT (news_row_id, chunk_index) DO UPDATE SET
                                 embedding   = EXCLUDED.embedding,
                                 model_ver   = EXCLUDED.model_ver,
                                 embedded_at = NOW()
