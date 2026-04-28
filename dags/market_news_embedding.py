@@ -2,9 +2,6 @@ import json
 import logging
 from datetime import timedelta
 
-import numpy as np
-import psycopg2
-import psycopg2.extras
 from airflow import DAG
 from airflow.sdk import task
 from airflow.sdk.bases.sensor import PokeReturnValue
@@ -32,6 +29,8 @@ TARGET_DIM = 768
 
 
 def _normalize(vec: list[float]) -> list[float]:
+    import numpy as np
+
     arr = np.array(vec, dtype=np.float32)
     norm = np.linalg.norm(arr)
     return (arr / norm if norm > 0 else arr).tolist()
@@ -47,6 +46,8 @@ with DAG(
 
     @task
     def submit_embed_batch() -> str | None:
+        import psycopg2
+        import psycopg2.extras
         from google import genai
 
         api_key = get_gemini_api_key()
@@ -127,7 +128,7 @@ with DAG(
 
         if batch_job.state.name == "JOB_STATE_SUCCEEDED":
             return PokeReturnValue(is_done=True, xcom_value=json.dumps(payload))
-        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:
+        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:\
             raise RuntimeError(f"Batch job failed: {batch_job.error}")
 
         return PokeReturnValue(is_done=False)
@@ -173,6 +174,9 @@ with DAG(
                     logger.error(f"Failed to parse embedding line {idx}: {e}")
 
         if tuples:
+            import psycopg2
+            import psycopg2.extras
+
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
                 with conn:
@@ -195,5 +199,7 @@ with DAG(
 
     # Orchestration
     job_payload = submit_embed_batch()
+    wait_payload = wait_for_embed_batch(job_payload)
+    process_embed_batch(wait_payload)
     wait_payload = wait_for_embed_batch(job_payload)
     process_embed_batch(wait_payload)

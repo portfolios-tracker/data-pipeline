@@ -2,16 +2,11 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-import pandas as pd
-import psycopg2
-import psycopg2.extras
 from airflow import DAG
 from airflow.sdk import task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import timezone
 
-from dags.etl_modules.extractors import run_all_extractors
-from dags.etl_modules.fetcher import get_active_vn_stock_tickers
 from dags.etl_modules.notifications import (
     send_failure_notification,
     send_success_notification,
@@ -45,6 +40,12 @@ with DAG(
         """
         Extract news from all sources and load them directly into the database.
         """
+        import pandas as pd
+        import psycopg2
+        import psycopg2.extras
+        from dags.etl_modules.extractors import run_all_extractors
+        from dags.etl_modules.fetcher import get_active_vn_stock_tickers
+
         tickers = get_active_vn_stock_tickers(raise_on_fallback=True)
         ticker_linked_rows, scraped_rows = run_all_extractors(tickers=tickers)
         logger.info(

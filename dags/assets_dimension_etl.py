@@ -17,11 +17,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta
-from io import StringIO
 
-import pandas as pd
-import psycopg2
-import psycopg2.extras
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 
@@ -52,6 +48,8 @@ dag = DAG(
 
 
 def _get_conn():
+    import psycopg2
+
     db_url = os.getenv("SUPABASE_DB_URL")
     if not db_url:
         raise RuntimeError("SUPABASE_DB_URL environment variable is not set")
@@ -60,6 +58,8 @@ def _get_conn():
 
 def upsert_assets_records(records: list[dict]) -> int:
     """Upsert asset records directly into market_data.assets using Supabase Postgres."""
+    import psycopg2.extras
+
     if not records:
         return 0
 

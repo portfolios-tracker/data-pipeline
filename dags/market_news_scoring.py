@@ -3,8 +3,6 @@ import logging
 import re
 from datetime import timedelta
 
-import psycopg2
-import psycopg2.extras
 from airflow import DAG
 from airflow.sdk import task
 from airflow.sdk.bases.sensor import PokeReturnValue
@@ -34,6 +32,8 @@ with DAG(
     @task
     def submit_score_batch() -> str | None:
         """Submits a BatchJob to Gemini and returns the job name."""
+        import psycopg2
+        import psycopg2.extras
         from google import genai
 
         api_key = get_gemini_api_key()
@@ -155,6 +155,9 @@ with DAG(
                         scraped_updates.append((0.0, m["news_id"]))
 
         if ticker_linked_updates or scraped_updates:
+            import psycopg2
+            import psycopg2.extras
+
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
                 with conn:

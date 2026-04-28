@@ -17,8 +17,6 @@ from typing import cast
 
 from airflow import DAG
 from airflow.sdk import task
-from google import genai
-from supabase import Client, create_client
 
 from dags.etl_modules.vci_provider import fetch_company_overview
 
@@ -63,8 +61,10 @@ dag = DAG(  # type: ignore[call-arg]
 )
 
 
-def get_supabase_client() -> Client:
+def get_supabase_client():
     """Create Supabase client with environment configuration."""
+    from supabase import create_client
+
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SECRET_OR_SERVICE_ROLE_KEY")
     if not url or not key:

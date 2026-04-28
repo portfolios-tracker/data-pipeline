@@ -4,13 +4,10 @@ from airflow import DAG
 from airflow.sdk import TaskGroup, task
 from pendulum import timezone
 
-from dags.etl_modules.adapters.market_data_repository import MarketDataRepository
-from dags.etl_modules.fetcher import FetcherFundamentalsProvider
 from dags.etl_modules.notifications import (
     send_failure_notification,
     send_success_notification,
 )
-from dags.etl_modules.orchestrators import fundamentals_orchestrator
 from dags.etl_modules.settings import get_env, get_env_int
 
 SUPABASE_DB_URL = get_env("SUPABASE_DB_URL")
@@ -101,9 +98,6 @@ ON CONFLICT (asset_id, fiscal_date) DO UPDATE SET
     ingested_at            = NOW()
 """
 
-FUNDAMENTALS_PROVIDER = FetcherFundamentalsProvider()
-MARKET_DATA_REPOSITORY = MarketDataRepository()
-
 default_args = {
     "owner": "data_engineer",
     "retries": 2,
@@ -126,16 +120,23 @@ with DAG(
 
     @task(show_return_value_in_logs=False)
     def extract_income_statements():
+        from dags.etl_modules.fetcher import FetcherFundamentalsProvider
+        from dags.etl_modules.orchestrators import fundamentals_orchestrator
+
         return fundamentals_orchestrator.extract_income_statements(
-            provider=FUNDAMENTALS_PROVIDER
+            provider=FetcherFundamentalsProvider()
         )
 
     @task
     def load_income_statements(data):
+        from dags.etl_modules.adapters.market_data_repository import MarketDataRepository
+        from dags.etl_modules.fetcher import FetcherFundamentalsProvider
+        from dags.etl_modules.orchestrators import fundamentals_orchestrator
+
         return fundamentals_orchestrator.load_income_statements(
             data,
-            provider=FUNDAMENTALS_PROVIDER,
-            repository=MARKET_DATA_REPOSITORY,
+            provider=FetcherFundamentalsProvider(),
+            repository=MarketDataRepository(),
             db_url=SUPABASE_DB_URL,
             batch_size=DB_UPSERT_BATCH_SIZE,
             upsert_sql=INCOME_STATEMENTS_UPSERT_SQL,
@@ -144,16 +145,23 @@ with DAG(
 
     @task(show_return_value_in_logs=False)
     def extract_balance_sheets():
+        from dags.etl_modules.fetcher import FetcherFundamentalsProvider
+        from dags.etl_modules.orchestrators import fundamentals_orchestrator
+
         return fundamentals_orchestrator.extract_balance_sheets(
-            provider=FUNDAMENTALS_PROVIDER
+            provider=FetcherFundamentalsProvider()
         )
 
     @task
     def load_balance_sheets(data):
+        from dags.etl_modules.adapters.market_data_repository import MarketDataRepository
+        from dags.etl_modules.fetcher import FetcherFundamentalsProvider
+        from dags.etl_modules.orchestrators import fundamentals_orchestrator
+
         return fundamentals_orchestrator.load_balance_sheets(
             data,
-            provider=FUNDAMENTALS_PROVIDER,
-            repository=MARKET_DATA_REPOSITORY,
+            provider=FetcherFundamentalsProvider(),
+            repository=MarketDataRepository(),
             db_url=SUPABASE_DB_URL,
             batch_size=DB_UPSERT_BATCH_SIZE,
             upsert_sql=BALANCE_SHEETS_UPSERT_SQL,
@@ -162,6 +170,8 @@ with DAG(
 
     @task(trigger_rule="all_done")
     def finalize_fundamentals_load(income_summary, balance_summary):
+        from dags.etl_modules.orchestrators import fundamentals_orchestrator
+
         return fundamentals_orchestrator.finalize_fundamentals_load(
             income_summary,
             balance_summary,

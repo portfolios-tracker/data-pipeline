@@ -1,9 +1,6 @@
 import os
 from datetime import datetime, timedelta
 
-import pandas as pd
-import psycopg2
-import psycopg2.extras
 from airflow import DAG
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import task
@@ -51,6 +48,8 @@ with DAG(
 
     @task
     def get_unprocessed_tickers():
+        import psycopg2
+
         print("Connecting to Supabase to find assets that need historical refresh...")
         conn = psycopg2.connect(SUPABASE_DB_URL)
         assets = []
@@ -74,6 +73,10 @@ with DAG(
 
     @task
     def refresh_ticker_history(assets: list):
+        import pandas as pd
+        import psycopg2
+        import psycopg2.extras
+
         if not assets:
             print("No assets to process. Exiting.")
             return
