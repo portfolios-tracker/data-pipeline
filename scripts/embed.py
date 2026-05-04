@@ -3,14 +3,16 @@ Sync-threaded direct embedding test script — NOT a DAG.
 Embeds unprocessed news articles via Gemini API using a thread pool and upserts to DB.
 
 Usage:
-    SUPABASE_DB_URL=... python test_async_embed.py [--limit 50] [--concurrency 10]
+    SUPABASE_DB_URL=... uv run scripts/embed.py [--limit 50] [--concurrency 10]
 """
 
 import argparse
 import logging
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
 
 import numpy as np
@@ -18,8 +20,15 @@ import psycopg2
 import psycopg2.extras
 from google import genai
 
-# ── reuse your existing helpers ───────────────────────────────────────────────
-from gemini_helpers import SUPABASE_DB_URL, chunk_text, get_gemini_api_key
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from dags.etl_modules.gemini_helpers import (
+    SUPABASE_DB_URL,
+    chunk_text,
+    get_gemini_api_key,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +40,6 @@ MODEL = "models/gemini-embedding-001"
 TARGET_DIM = 768
 
 
-# ── data container ────────────────────────────────────────────────────────────
 @dataclass
 class ChunkJob:
     news_row_id: str
@@ -39,7 +47,6 @@ class ChunkJob:
     text: str
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
 def _normalize(vec: list[float]) -> list[float]:
     arr = np.array(vec, dtype=np.float32)
     norm = np.linalg.norm(arr)
@@ -107,7 +114,6 @@ def upsert_embeddings(tuples: list[tuple]) -> None:
         conn.close()
 
 
-# ── sync worker (one per thread) ──────────────────────────────────────────────
 def embed_chunk(
     client: genai.Client,
     job: ChunkJob,
@@ -146,7 +152,6 @@ def embed_chunk(
         return None
 
 
-# ── entrypoint ────────────────────────────────────────────────────────────────
 def run(limit: int, concurrency: int) -> None:
     api_key = get_gemini_api_key()
     if not api_key:
@@ -160,7 +165,7 @@ def run(limit: int, concurrency: int) -> None:
 
     jobs = build_chunk_jobs(rows)
     logger.info(
-        f"Articles: {len(rows)} → Chunks: {len(jobs)} (concurrency={concurrency})"
+        f"Articles: {len(rows)} -> Chunks: {len(jobs)} (concurrency={concurrency})"
     )
 
     client = genai.Client(api_key=api_key)
@@ -182,7 +187,7 @@ def run(limit: int, concurrency: int) -> None:
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        f"Embedding done in {elapsed:.1f}s — "
+        f"Embedding done in {elapsed:.1f}s - "
         f"success={stats['success']}, failed={stats['failed']}, skipped={stats['skipped']}"
     )
 
