@@ -112,7 +112,7 @@ with DAG(
         )
         return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
 
-    @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+    @task.sensor(poke_interval=300, timeout=28800, mode="reschedule")
     def wait_for_embed_batch(job_payload: str | None) -> PokeReturnValue:
         if not job_payload:
             return PokeReturnValue(is_done=True, xcom_value=None)
