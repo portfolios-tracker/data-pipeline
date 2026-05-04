@@ -26,6 +26,7 @@ EXPECTED_DAG_IDS = {
     "market_data_fundamentals_weekly",
     "market_data_prices_daily",
     "market_data_ratios_weekly",
+    "market_news_embedding",
     "market_news_morning",
     "portfolio_schedule_snapshot",
     "refresh_historical_prices",

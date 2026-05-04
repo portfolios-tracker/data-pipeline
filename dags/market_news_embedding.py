@@ -1,17 +1,13 @@
-import json
 import logging
 from datetime import timedelta
 
 from airflow import DAG
 from airflow.sdk import task
-from airflow.sdk.bases.sensor import PokeReturnValue
-from pendulum import timezone
 
 from dags.etl_modules.gemini_helpers import (
     SUPABASE_DB_URL,
-    get_gemini_api_key,
-    truncate_text,
     chunk_text,
+    get_gemini_api_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,10 +18,9 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-# gemini-embedding-001 is the stable production model.
-# We request 768 dimensions directly from the API using Matryoshka Representation Learning (MRL).
 MODEL = "models/gemini-embedding-001"
 TARGET_DIM = 768
+EMBED_BATCH_SIZE = 100
 
 
 def _normalize(vec: list[float]) -> list[float]:
@@ -36,145 +31,113 @@ def _normalize(vec: list[float]) -> list[float]:
     return (arr / norm if norm > 0 else arr).tolist()
 
 
+def _iter_batches(items: list, batch_size: int) -> list[list]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+
+
 with DAG(
     dag_id="market_news_embedding",
     default_args=default_args,
     schedule=None,
     catchup=False,
-    tags=["news", "embedding", "gemini-batch"],
+    tags=["news", "embedding", "gemini-direct"],
 ) as dag:
 
     @task
-    def submit_embed_batch() -> str | None:
+    def generate_and_upsert_embeddings() -> int:
         import psycopg2
         import psycopg2.extras
         from google import genai
 
         api_key = get_gemini_api_key()
         if not api_key:
-            return None
+            raise RuntimeError("GEMINI_API_KEY not found.")
 
         conn = psycopg2.connect(SUPABASE_DB_URL)
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT n.id as news_row_id, n.title, n.news_content
+                    SELECT n.id AS news_row_id, n.title, n.news_content
                     FROM market_data.news n
                     WHERE NOT EXISTS (
                         SELECT 1 FROM market_data.news_embeddings e
                         WHERE e.news_row_id = n.id
                     )
-                      AND n.news_content IS NOT NULL 
+                      AND n.news_content IS NOT NULL
                       AND trim(n.news_content) != ''
                     LIMIT 200
-                    """
+                    """,
                 )
                 rows = cur.fetchall()
         finally:
             conn.close()
 
         if not rows:
-            return None
+            return 0
 
-        texts_to_embed = []
-        id_mappings = []
+        texts_to_embed: list[str] = []
+        id_mappings: list[dict] = []
 
-        for r in rows:
-            full_text = f"{r['title']}. {r['news_content'] or ''}".strip()
-            # 4000 chars / 800 overlap (~150 words) for financial context retention
+        for row in rows:
+            full_text = f"{row['title']}. {row['news_content'] or ''}".strip()
             chunks = chunk_text(full_text, chunk_size=4000, chunk_overlap=800)
 
-            for i, chunk in enumerate(chunks):
+            for chunk_index, chunk in enumerate(chunks):
                 texts_to_embed.append(chunk)
                 id_mappings.append(
                     {
-                        "news_row_id": str(r["news_row_id"]),
-                        "chunk_index": i,
+                        "news_row_id": str(row["news_row_id"]),
+                        "chunk_index": chunk_index,
                     }
                 )
 
         client = genai.Client(api_key=api_key)
-
-        # Batch create using stable 001 model with direct 768d MRL output.
-        # This reduces network payload and ensures pgvector compatibility.
-        batch_job = client.batches.create_embeddings(
-            model=MODEL,
-            src={
-                "inlined_requests": {
-                    "contents": texts_to_embed,
-                    "config": {
-                        "output_dimensionality": TARGET_DIM,
-                        "task_type": "RETRIEVAL_DOCUMENT",
-                    },
-                }
-            },
-        )
-        return json.dumps({"job_name": batch_job.name, "mappings": id_mappings})
-
-    @task.sensor(poke_interval=300, timeout=28800, mode="reschedule")
-    def wait_for_embed_batch(job_payload: str | None) -> PokeReturnValue:
-        if not job_payload:
-            return PokeReturnValue(is_done=True, xcom_value=None)
-
-        payload = json.loads(job_payload)
-        job_name = payload["job_name"]
-
-        from google import genai
-
-        client = genai.Client(api_key=get_gemini_api_key())
-        batch_job = client.batches.get(name=job_name)
-
-        if batch_job.state.name == "JOB_STATE_SUCCEEDED":
-            return PokeReturnValue(is_done=True, xcom_value=json.dumps(payload))
-        elif batch_job.state.name in ["JOB_STATE_FAILED", "JOB_STATE_CANCELLED"]:
-            raise RuntimeError(f"Batch job failed: {batch_job.error}")
-
-        return PokeReturnValue(is_done=False)
-
-    @task
-    def process_embed_batch(job_payload: str | None) -> None:
-        if not job_payload:
-            return
-
-        payload = json.loads(job_payload)
-        job_name = payload["job_name"]
-        mappings = payload["mappings"]
-
-        from google import genai
-
-        client = genai.Client(api_key=get_gemini_api_key())
-        batch_job = client.batches.get(name=job_name)
-
         tuples = []
-        if batch_job.dest.inlined_embed_content_responses:
-            for idx, resp in enumerate(batch_job.dest.inlined_embed_content_responses):
-                try:
-                    # Accessing single 'embedding' attribute as confirmed by SDK inspection
-                    values = resp.response.embedding.values
-                    if not values:
-                        continue
+        processed = 0
 
-                    # API already returns TARGET_DIM (768) and normalizes for RETRIEVAL_DOCUMENT.
-                    # We re-normalize just for floating point safety.
-                    norm_values = _normalize(values)
+        for batch_texts in _iter_batches(texts_to_embed, EMBED_BATCH_SIZE):
+            response = client.models.embed_content(
+                model=MODEL,
+                contents=batch_texts,
+                config={
+                    "output_dimensionality": TARGET_DIM,
+                    "task_type": "RETRIEVAL_DOCUMENT",
+                },
+            )
 
-                    m = mappings[idx]
-                    tuples.append(
-                        (
-                            m["news_row_id"],
-                            m["chunk_index"],
-                            norm_values,
-                            f"gemini-001-{TARGET_DIM}d",
-                        )
+            if len(response.embeddings) != len(batch_texts):
+                raise ValueError(
+                    "Embedding count mismatch: "
+                    f"{len(response.embeddings)} embeddings for "
+                    f"{len(batch_texts)} chunks"
+                )
+
+            for offset, embedding in enumerate(response.embeddings):
+                mapping = id_mappings[processed + offset]
+                values = embedding.values
+                if not values:
+                    logger.warning(
+                        "Empty embedding: %s[%s]",
+                        mapping["news_row_id"],
+                        mapping["chunk_index"],
                     )
-                except Exception as e:
-                    logger.error(f"Failed to parse embedding line {idx}: {e}")
+                    continue
+
+                tuples.append(
+                    (
+                        mapping["news_row_id"],
+                        mapping["chunk_index"],
+                        _normalize(values),
+                        f"gemini-001-{TARGET_DIM}d",
+                    )
+                )
+
+            processed += len(batch_texts)
 
         if tuples:
-            import psycopg2
-            import psycopg2.extras
-
             conn = psycopg2.connect(SUPABASE_DB_URL)
             try:
                 with conn:
@@ -186,8 +149,8 @@ with DAG(
                                 (news_row_id, chunk_index, embedding, model_ver)
                             VALUES %s
                             ON CONFLICT (news_row_id, chunk_index) DO UPDATE SET
-                                embedding   = EXCLUDED.embedding,
-                                model_ver   = EXCLUDED.model_ver,
+                                embedding = EXCLUDED.embedding,
+                                model_ver = EXCLUDED.model_ver,
                                 embedded_at = NOW()
                             """,
                             tuples,
@@ -195,7 +158,6 @@ with DAG(
             finally:
                 conn.close()
 
-    # Orchestration
-    job_payload = submit_embed_batch()
-    wait_payload = wait_for_embed_batch(job_payload)
-    process_embed_batch(wait_payload)
+        return len(tuples)
+
+    generate_and_upsert_embeddings()
