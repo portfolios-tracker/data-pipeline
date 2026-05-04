@@ -9,15 +9,6 @@ from airflow import DAG
 from airflow.sdk import task
 from pendulum import timezone
 
-from dags.etl_modules.fetcher import (
-    fetch_corporate_events,
-    get_active_vn_stock_tickers,
-)
-from dags.etl_modules.notifications import (
-    send_failure_notification,
-    send_success_notification,
-)
-
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 DB_UPSERT_BATCH_SIZE = int(os.getenv("DB_UPSERT_BATCH_SIZE", "100"))
 EVENT_FETCH_LOOKBACK_DAYS = int(os.getenv("EVENT_FETCH_LOOKBACK_DAYS", "30"))
@@ -56,6 +47,30 @@ default_args = {
 }
 
 local_tz = timezone("Asia/Bangkok")
+
+
+def get_active_vn_stock_tickers(*, raise_on_fallback=False):
+    from dags.etl_modules.fetcher import get_active_vn_stock_tickers as _impl
+
+    return _impl(raise_on_fallback=raise_on_fallback)
+
+
+def fetch_corporate_events(*args, **kwargs):
+    from dags.etl_modules.fetcher import fetch_corporate_events as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _send_success_notification(context):
+    from dags.etl_modules.notifications import send_success_notification
+
+    return send_success_notification(context)
+
+
+def _send_failure_notification(context):
+    from dags.etl_modules.notifications import send_failure_notification
+
+    return send_failure_notification(context)
 
 
 def _chunked_rows(rows, chunk_size):
@@ -147,8 +162,8 @@ with DAG(
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
     tags=["corporate-events", "supabase", "evening-batch"],
-    on_success_callback=send_success_notification,
-    on_failure_callback=send_failure_notification,
+    on_success_callback=_send_success_notification,
+    on_failure_callback=_send_failure_notification,
 ) as dag:
 
     @task(show_return_value_in_logs=False)

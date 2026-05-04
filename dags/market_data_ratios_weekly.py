@@ -4,11 +4,6 @@ from airflow import DAG
 from airflow.sdk import task
 from pendulum import timezone
 
-from dags.etl_modules.notifications import (
-    send_failure_notification,
-    send_success_notification,
-)
-from dags.etl_modules.orchestrators import ratios_orchestrator
 from dags.etl_modules.settings import get_env, get_env_int
 
 # CONFIG
@@ -127,6 +122,24 @@ default_args = {
 local_tz = timezone("Asia/Bangkok")
 
 
+def _send_success_notification(context):
+    from dags.etl_modules.notifications import send_success_notification
+
+    return send_success_notification(context)
+
+
+def _send_failure_notification(context):
+    from dags.etl_modules.notifications import send_failure_notification
+
+    return send_failure_notification(context)
+
+
+def _get_ratios_orchestrator():
+    from dags.etl_modules.orchestrators import ratios_orchestrator
+
+    return ratios_orchestrator
+
+
 with DAG(
     dag_id="market_data_ratios_weekly",
     default_args=default_args,
@@ -134,24 +147,24 @@ with DAG(
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
     tags=["financials", "ratios", "supabase", "weekly"],
-    on_success_callback=send_success_notification,
-    on_failure_callback=send_failure_notification,
+    on_success_callback=_send_success_notification,
+    on_failure_callback=_send_failure_notification,
 ) as dag:
 
     @task(show_return_value_in_logs=False)
     def list_ratio_assets():
-        return ratios_orchestrator.list_ratio_assets()
+        return _get_ratios_orchestrator().list_ratio_assets()
 
     @task(show_return_value_in_logs=False)
     def chunk_ratio_assets(assets):
-        return ratios_orchestrator.chunk_assets(
+        return _get_ratios_orchestrator().chunk_assets(
             assets,
             chunk_size=DB_UPSERT_BATCH_SIZE,
         )
 
     @task
     def process_ratio_chunk(chunk_payload):
-        return ratios_orchestrator.process_ratio_chunk(
+        return _get_ratios_orchestrator().process_ratio_chunk(
             chunk_payload,
             db_url=SUPABASE_DB_URL,
             batch_size=DB_UPSERT_BATCH_SIZE,
@@ -162,7 +175,7 @@ with DAG(
 
     @task(trigger_rule="all_done")
     def finalize_ratio_load(chunk_results):
-        return ratios_orchestrator.finalize_ratio_load(chunk_results)
+        return _get_ratios_orchestrator().finalize_ratio_load(chunk_results)
 
     ratio_assets = list_ratio_assets()
     ratio_chunks = chunk_ratio_assets(ratio_assets)

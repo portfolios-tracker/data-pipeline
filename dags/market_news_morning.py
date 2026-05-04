@@ -7,11 +7,6 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import task
 from pendulum import timezone
 
-from dags.etl_modules.notifications import (
-    send_failure_notification,
-    send_success_notification,
-)
-
 logger = logging.getLogger(__name__)
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
@@ -24,6 +19,18 @@ default_args = {
 
 local_tz = timezone("Asia/Bangkok")
 
+
+def _send_success_notification(context):
+    from dags.etl_modules.notifications import send_success_notification
+
+    return send_success_notification(context)
+
+
+def _send_failure_notification(context):
+    from dags.etl_modules.notifications import send_failure_notification
+
+    return send_failure_notification(context)
+
 with DAG(
     dag_id="market_news_morning",
     default_args=default_args,
@@ -31,8 +38,8 @@ with DAG(
     start_date=datetime(2024, 1, 1, tzinfo=local_tz),
     catchup=False,
     tags=["news", "supabase", "morning-brief", "extraction"],
-    on_success_callback=send_success_notification,
-    on_failure_callback=send_failure_notification,
+    on_success_callback=_send_success_notification,
+    on_failure_callback=_send_failure_notification,
 ) as dag:
 
     @task

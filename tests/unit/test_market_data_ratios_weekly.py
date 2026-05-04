@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from dags import market_data_ratios_weekly
@@ -26,9 +28,9 @@ def test_chunk_ratio_assets_delegates_to_orchestrator(monkeypatch):
         return [{"chunk_index": 1, "assets": value}]
 
     monkeypatch.setattr(
-        market_data_ratios_weekly.ratios_orchestrator,
-        "chunk_assets",
-        _fake_chunk_assets,
+        market_data_ratios_weekly,
+        "_get_ratios_orchestrator",
+        lambda: SimpleNamespace(chunk_assets=_fake_chunk_assets),
     )
 
     result = market_data_ratios_weekly.chunk_ratio_assets.function(assets)
@@ -67,9 +69,9 @@ def test_process_ratio_chunk_delegates_to_orchestrator(monkeypatch):
         return expected_summary
 
     monkeypatch.setattr(
-        market_data_ratios_weekly.ratios_orchestrator,
-        "process_ratio_chunk",
-        _fake_process,
+        market_data_ratios_weekly,
+        "_get_ratios_orchestrator",
+        lambda: SimpleNamespace(process_ratio_chunk=_fake_process),
     )
 
     result = market_data_ratios_weekly.process_ratio_chunk.function(payload)
@@ -96,9 +98,9 @@ def test_finalize_ratio_load_delegates_to_orchestrator(monkeypatch):
         return expected
 
     monkeypatch.setattr(
-        market_data_ratios_weekly.ratios_orchestrator,
-        "finalize_ratio_load",
-        _fake_finalize,
+        market_data_ratios_weekly,
+        "_get_ratios_orchestrator",
+        lambda: SimpleNamespace(finalize_ratio_load=_fake_finalize),
     )
 
     assert (

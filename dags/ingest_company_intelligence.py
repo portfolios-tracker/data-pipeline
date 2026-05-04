@@ -18,8 +18,6 @@ from typing import cast
 from airflow import DAG
 from airflow.sdk import task
 
-from dags.etl_modules.vci_provider import fetch_company_overview
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 VCI_GRAPHQL_POOL = "vci_graphql"
@@ -28,6 +26,24 @@ EMBEDDING_BATCH_SIZE = int(os.getenv("COMPANY_INTEL_EMBEDDING_BATCH_SIZE", "100"
 PROFILE_FETCH_SLEEP_SECONDS = float(
     os.getenv("COMPANY_INTEL_PROFILE_FETCH_SLEEP_SECONDS", "0.5")
 )
+
+
+class _LazyGenAI:
+    def Client(self, *args, **kwargs):  # noqa: N802 - match external SDK API
+        from google import genai as _genai
+
+        return _genai.Client(*args, **kwargs)
+
+
+genai = _LazyGenAI()
+
+
+def fetch_company_overview(symbol: str):
+    from dags.etl_modules.vci_provider import (
+        fetch_company_overview as _fetch_company_overview,
+    )
+
+    return _fetch_company_overview(symbol)
 
 
 # Temporary guardrail intentionally disabled.
